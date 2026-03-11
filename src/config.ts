@@ -133,3 +133,17 @@ export const AGENT_ROLES = {
 } as const;
 
 export type AgentRole = keyof typeof AGENT_ROLES;
+
+// ═══════════════════════════════════════════════════════════════
+// Watchlist — companies to analyze in batch mode
+// ═══════════════════════════════════════════════════════════════
+
+export const WATCHLIST = [
+  { name: "NVIDIA",  ticker: "NVDA" },
+  { name: "Apple",   ticker: "AAPL" },
+  { name: "Google",  ticker: "GOOGL" },
+  { name: "Micron",  ticker: "MU" },
+  { name: "AMD",     ticker: "AMD" },
+  { name: "Amazon",  ticker: "AMZN" },
+  { name: "Alibaba", ticker: "BABA" },
+];

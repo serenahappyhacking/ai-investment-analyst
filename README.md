@@ -25,7 +25,7 @@ graph TD
     reflexion -->|"score < 7 AND retries < 3"| report
     reflexion -->|"score ≥ 7 OR max retries"| delivery[Delivery Crew<br/><i>2 agents · MCP</i>]
 
-    delivery --> finalize[Finalize<br/><i>Save report + cost summary</i>]
+    delivery --> finalize[Finalize<br/><i>Save to Notion + email + cost summary</i>]
     finalize --> END([END])
 ```
 
@@ -39,7 +39,7 @@ graph TD
 **Engineering**
 - **Live Data Verification** — real-time Yahoo Finance data appended as verified appendix, superseding any LLM-hallucinated figures
 - **Parallel Execution** — Analysis crew runs 3 specialists concurrently via `Promise.all`, cutting latency by ~3x
-- **MCP Integration** — Notion (knowledge base), Gmail (distribution), Calendar (follow-ups) connected via Model Context Protocol
+- **Notion + Email Delivery** — reports auto-saved to Notion database and emailed with executive summary; direct API integration (no LLM needed for delivery) with graceful fallback when unconfigured
 - **Cost Controls** — per-agent token tracking with budget enforcement; cost summary included in final output
 - **Type Safety** — full TypeScript with LangGraph `Annotation` API for compile-time state validation
 
@@ -61,6 +61,7 @@ graph TD
 | Streaming | Vercel AI SDK |
 | LLM | DeepSeek (chat + reasoner models) |
 | Finance Data | Yahoo Finance Chart API (real-time quotes, historical data) |
+| Delivery | Notion API (`@notionhq/client`), Nodemailer (SMTP/Gmail) |
 | External Services | Model Context Protocol — Notion, Gmail, Calendar |
 | Runtime | TypeScript, Node.js |
 
@@ -79,7 +80,31 @@ npx tsx src/main.ts --company "NVIDIA" --mode full
 
 # Quick mode (skips risk assessment)
 npx tsx src/main.ts --company "Apple" --mode quick
+
+# Watchlist mode — analyze all 7 tracked companies
+# (NVIDIA, Apple, Google, Micron, AMD, Amazon, Alibaba)
+npm run watchlist             # full analysis
+npm run watchlist:quick       # quick mode
 ```
+
+### Notion + Email Setup (Optional)
+
+Add to `.env` to enable auto-delivery:
+
+```bash
+# Reports auto-saved to Notion database
+NOTION_API_KEY=ntn_xxx
+NOTION_DATABASE_ID=xxx
+
+# Email notification with executive summary + report attachment
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=465
+SMTP_USER=you@gmail.com
+SMTP_PASS=your-gmail-app-password
+EMAIL_TO=you@gmail.com
+```
+
+When configured, each report is automatically saved to Notion and emailed after generation. When not configured, delivery is gracefully skipped — reports are still generated and saved locally.
 
 ## Project Structure
 
@@ -89,10 +114,13 @@ src/
 ├── config.ts                # Model & workflow config
 ├── streaming.ts             # Vercel AI SDK streaming
 ├── types/index.ts           # LangGraph state + domain types
+├── integrations/
+│   ├── notionClient.ts      # Notion API — save reports as pages
+│   └── emailClient.ts       # SMTP email — report notifications
 ├── tools/
 │   ├── searchTools.ts       # DuckDuckGo HTML search, proxy-aware (3 tools)
 │   ├── financeTools.ts      # Yahoo Finance API, real-time quotes (2 tools)
-│   └── mcpTools.ts          # Notion/Gmail/Calendar (6 tools)
+│   └── mcpTools.ts          # Notion/Gmail/Calendar (6 tools, real-or-stub)
 ├── crews/index.ts           # 4 crews: Research/Analysis/Risk/Delivery
 ├── graph/
 │   ├── nodes.ts             # 9 LangGraph node functions

@@ -10,10 +10,12 @@
  */
 
 import "dotenv/config";
-import { AGENT_ROLES } from "./config.js";
+import { AGENT_ROLES, WATCHLIST } from "./config.js";
 import { getSearchTools } from "./tools/searchTools.js";
 import { getFinanceTools } from "./tools/financeTools.js";
 import { getAllMcpTools } from "./tools/mcpTools.js";
+import { isNotionConfigured } from "./integrations/notionClient.js";
+import { isEmailConfigured } from "./integrations/emailClient.js";
 
 function printBanner() {
   console.log("\n" + "=".repeat(65));
@@ -120,6 +122,59 @@ async function runDemo() {
   console.log("   Usage: npx tsx src/main.ts --company 'NVIDIA' --mode full");
 }
 
+// ═══════════════════════════════════════════════════════════════
+// Watchlist Mode — Batch analysis of tracked companies
+// ═══════════════════════════════════════════════════════════════
+
+async function runWatchlist(mode: "quick" | "full") {
+  console.log("📋 WATCHLIST MODE — Analyzing tracked companies\n");
+  console.log(`  📝 Notion: ${isNotionConfigured() ? "✅ connected" : "⏭️ not configured"}`);
+  console.log(`  📧 Email:  ${isEmailConfigured() ? "✅ connected" : "⏭️ not configured"}`);
+  console.log(`  ⚙️  Mode:   ${mode}`);
+  console.log(`  🏢 Companies: ${WATCHLIST.map((c) => c.name).join(", ")}\n`);
+  console.log("-".repeat(65));
+
+  const results: { company: string; status: string; duration: number }[] = [];
+
+  for (let i = 0; i < WATCHLIST.length; i++) {
+    const { name } = WATCHLIST[i];
+    const start = Date.now();
+
+    console.log(`\n${"═".repeat(65)}`);
+    console.log(`  [${i + 1}/${WATCHLIST.length}] Analyzing ${name}...`);
+    console.log("═".repeat(65));
+
+    try {
+      await runFullPipeline(
+        name,
+        `Comprehensive investment analysis of ${name}`,
+        mode
+      );
+      const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+      results.push({ company: name, status: "✅ completed", duration: Number(elapsed) });
+    } catch (e) {
+      const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+      results.push({ company: name, status: `❌ failed: ${String(e).slice(0, 50)}`, duration: Number(elapsed) });
+      console.error(`  ❌ ${name} failed: ${e}`);
+    }
+
+    // Brief pause between companies to avoid rate limits
+    if (i < WATCHLIST.length - 1) {
+      console.log("\n  ⏳ Pausing 5s before next company...");
+      await new Promise((r) => setTimeout(r, 5000));
+    }
+  }
+
+  // Summary table
+  console.log(`\n${"═".repeat(65)}`);
+  console.log("  📊 WATCHLIST SUMMARY");
+  console.log("═".repeat(65));
+  for (const r of results) {
+    console.log(`  ${r.company.padEnd(15)} ${r.status.padEnd(30)} (${r.duration}s)`);
+  }
+  console.log("═".repeat(65));
+}
+
 // ── CLI Parsing ─────────────────────────────────────────────
 
 async function main() {
@@ -131,7 +186,7 @@ async function main() {
   for (let i = 0; i < args.length; i++) {
     if (args[i].startsWith("--")) {
       const key = args[i].slice(2);
-      if (key === "demo" || key === "v2") {
+      if (key === "demo" || key === "v2" || key === "watchlist") {
         flags[key] = "true";
       } else if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
         flags[key] = args[i + 1];
@@ -142,6 +197,9 @@ async function main() {
 
   if (flags.demo) {
     await runDemo();
+  } else if (flags.watchlist) {
+    const mode = (flags.mode === "quick" ? "quick" : "full") as "quick" | "full";
+    await runWatchlist(mode);
   } else if (flags.company) {
     const query = flags.query ?? `Comprehensive investment analysis of ${flags.company}`;
     const mode = (flags.mode === "quick" ? "quick" : "full") as "quick" | "full";

@@ -18,6 +18,8 @@
 
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
+import { isNotionConfigured, saveReportToNotion } from "../integrations/notionClient.js";
+import { isEmailConfigured, sendReportEmail } from "../integrations/emailClient.js";
 
 // ═══════════════════════════════════════════════════════════════
 // Notion MCP Tools
@@ -25,21 +27,39 @@ import { z } from "zod";
 
 export const notionSaveAnalysis = tool(
   async ({ title, content, tags }): Promise<string> => {
-    // Production: Call Notion MCP server via @modelcontextprotocol/sdk
-    // const client = new Client({ name: "research-agent" });
-    // await client.callTool("notion-create-pages", { title, content, ... });
-
     const tagList = tags
       ? tags.split(",").map((t: string) => t.trim())
       : [];
 
+    // Use real Notion API when configured, otherwise stub
+    if (isNotionConfigured()) {
+      try {
+        const result = await saveReportToNotion({
+          company: title,
+          report: content,
+          tags: tagList,
+        });
+        return JSON.stringify({
+          status: "success",
+          message: `Analysis "${title}" saved to Notion`,
+          pageUrl: result.pageUrl,
+          pageId: result.pageId,
+          tags: tagList,
+        });
+      } catch (error) {
+        return JSON.stringify({
+          status: "error",
+          message: `Failed to save to Notion: ${String(error)}`,
+        });
+      }
+    }
+
     return JSON.stringify({
       status: "success",
-      message: `Analysis "${title}" saved to Notion`,
+      message: `Analysis "${title}" saved to Notion (stub)`,
       pageUrl: `https://notion.so/team/analysis-${title.toLowerCase().replace(/\s+/g, "-")}`,
       tags: tagList,
-      mcpServer: "notion",
-      note: "Production: calls Notion MCP server",
+      note: "Set NOTION_API_KEY + NOTION_DATABASE_ID for real integration",
     });
   },
   {
@@ -92,12 +112,32 @@ export const notionSearchPastAnalyses = tool(
 
 export const gmailSendReport = tool(
   async ({ to, subject, body, cc }): Promise<string> => {
+    // Use real email when configured
+    if (isEmailConfigured()) {
+      try {
+        const result = await sendReportEmail({
+          company: subject,
+          report: body,
+        });
+        return JSON.stringify({
+          status: "success",
+          message: `Report email sent to ${process.env.EMAIL_TO}`,
+          messageId: result.messageId,
+        });
+      } catch (error) {
+        return JSON.stringify({
+          status: "error",
+          message: `Email failed: ${String(error)}`,
+        });
+      }
+    }
+
     return JSON.stringify({
       status: "success",
-      message: `Report email sent to ${to}`,
+      message: `Report email sent to ${to} (stub)`,
       subject,
       cc: cc ?? "",
-      mcpServer: "gmail",
+      note: "Set SMTP_HOST + SMTP_USER + SMTP_PASS + EMAIL_TO for real email",
     });
   },
   {

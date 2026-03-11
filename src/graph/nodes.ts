@@ -12,6 +12,10 @@ import { DynamicPlanner } from "../skills/dynamicPlanner.js";
 import { ReflexionEngine } from "../skills/reflexion.js";
 import { notionSearchPastAnalyses } from "../tools/mcpTools.js";
 import { getStockInfo } from "../tools/financeTools.js";
+import {
+  isNotionConfigured, saveReportToNotion,
+  isEmailConfigured, sendReportEmail,
+} from "../integrations/index.js";
 
 function timestamp(): string {
   return new Date().toLocaleTimeString("en-US", { hour12: false });
@@ -285,7 +289,7 @@ export async function reflexionNode(state: AgentState): Promise<Partial<AgentSta
       currentPhase: "reflexion_complete",
       logs: [
         `[${timestamp()}] 🪞 Reflexion: score=${result.score}/10 ` +
-          `(attempt ${result.attemptNumber}), ` +
+          `(attempt ${iteration + 1}), ` +
           `retry=${result.shouldRetry}, ` +
           `actions=${result.actionItems.length}`,
       ],
@@ -306,28 +310,65 @@ export async function reflexionNode(state: AgentState): Promise<Partial<AgentSta
 
 export async function deliveryNode(state: AgentState): Promise<Partial<AgentState>> {
   const report = state.finalReport || state.draftReport || "";
+  const logs: string[] = [];
+  let notionSaved = false;
+  let emailSent = false;
+  let notionUrl: string | undefined;
 
-  try {
-    const crew = new DeliveryCrew();
-    const result = await crew.run(state.company, report, state.riskScore ?? 5);
-
-    return {
-      deliveryStatus: result.deliveryStatus,
-      currentPhase: "delivered",
-      logs: [
-        `[${timestamp()}] 📨 Delivery complete:`,
-        `  📝 Notion: ${result.notionSaved ? "✅" : "❌"}`,
-        `  📧 Email: ${result.emailSent ? "✅" : "❌"}`,
-        `  📅 Meeting: ${result.meetingScheduled ? "✅" : "❌"}`,
-      ],
-    };
-  } catch (e) {
-    return {
-      deliveryStatus: `Failed: ${String(e)}`,
-      errors: [`Delivery error: ${String(e)}`],
-      logs: [`[${timestamp()}] ❌ Delivery failed: ${String(e)}`],
-    };
+  // ── Direct integrations (reliable, no LLM needed) ──────────
+  if (isNotionConfigured()) {
+    try {
+      const result = await saveReportToNotion({
+        company: state.company,
+        report,
+        riskScore: state.riskScore,
+        tags: [state.company, "investment-analysis"],
+      });
+      notionSaved = true;
+      notionUrl = result.pageUrl;
+      logs.push(`[${timestamp()}] 📝 Notion: ✅ saved → ${result.pageUrl}`);
+    } catch (e) {
+      logs.push(`[${timestamp()}] 📝 Notion: ❌ ${String(e)}`);
+    }
+  } else {
+    logs.push(`[${timestamp()}] 📝 Notion: ⏭️ skipped (NOTION_API_KEY not set)`);
   }
+
+  if (isEmailConfigured()) {
+    try {
+      const result = await sendReportEmail({
+        company: state.company,
+        report,
+        riskScore: state.riskScore,
+        notionUrl,
+      });
+      emailSent = true;
+      logs.push(`[${timestamp()}] 📧 Email: ✅ sent (${result.messageId})`);
+    } catch (e) {
+      logs.push(`[${timestamp()}] 📧 Email: ❌ ${String(e)}`);
+    }
+  } else {
+    logs.push(`[${timestamp()}] 📧 Email: ⏭️ skipped (SMTP not configured)`);
+  }
+
+  // ── Fallback to LLM-based delivery crew (when no direct integrations) ──
+  if (!isNotionConfigured() && !isEmailConfigured()) {
+    try {
+      const crew = new DeliveryCrew();
+      const result = await crew.run(state.company, report, state.riskScore ?? 5);
+      notionSaved = result.notionSaved;
+      emailSent = result.emailSent;
+      logs.push(`[${timestamp()}] 📨 Delivery crew (stub) completed`);
+    } catch (e) {
+      logs.push(`[${timestamp()}] ❌ Delivery crew failed: ${String(e)}`);
+    }
+  }
+
+  return {
+    deliveryStatus: `notion=${notionSaved}, email=${emailSent}`,
+    currentPhase: "delivered",
+    logs: [`[${timestamp()}] 📨 Delivery complete:`, ...logs],
+  };
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -348,6 +389,8 @@ const TICKER_MAP: Record<string, string> = {
   microsoft: "MSFT", amazon: "AMZN", meta: "META", facebook: "META",
   tesla: "TSLA", netflix: "NFLX", amd: "AMD", intel: "INTC",
   broadcom: "AVGO", tsmc: "TSM", samsung: "005930.KS",
+  micron: "MU", alibaba: "BABA", "阿里巴巴": "BABA", "美光": "MU",
+  "英伟达": "NVDA", "苹果": "AAPL", "谷歌": "GOOGL", "亚马逊": "AMZN",
 };
 
 function guessTickerFromCompany(company: string): string | null {
