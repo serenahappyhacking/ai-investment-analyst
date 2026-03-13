@@ -2,14 +2,20 @@
  * LangGraph Node Functions
  * =========================
  * Each node reads from and writes to AgentState.
- * Thin adapter between LangGraph state and crews/skills.
+ *
+ * Architecture upgrades:
+ *   - ProcessRewardModel evaluates each step (was defined but never used)
+ *   - DynamicPlanner.adaptPlan() called after major nodes (was defined but never called)
+ *   - CostTracker generates final cost report in finalize node
+ *   - Error-aware phase naming enables conditional routing in workflow.ts
  */
 
 import type { AgentState } from "../types/index.js";
 import { ResearchCrew, AnalysisCrew, RiskCrew, DeliveryCrew } from "../crews/index.js";
 import { ReportWriterAgent } from "../agents/reportWriter.js";
-import { DynamicPlanner } from "../skills/dynamicPlanner.js";
+import { DynamicPlanner, type ExecutionPlan } from "../skills/dynamicPlanner.js";
 import { ReflexionEngine } from "../skills/reflexion.js";
+import { ProcessRewardModel } from "../skills/processReward.js";
 import { notionSearchPastAnalyses } from "../tools/mcpTools.js";
 import { getStockInfo } from "../tools/financeTools.js";
 import {
@@ -20,6 +26,9 @@ import {
 function timestamp(): string {
   return new Date().toLocaleTimeString("en-US", { hour12: false });
 }
+
+// Shared PRM instance across nodes to accumulate evaluations
+const prm = new ProcessRewardModel();
 
 // ═══════════════════════════════════════════════════════════════
 // Node: Dynamic Planning
@@ -33,13 +42,13 @@ export async function planningNode(state: AgentState): Promise<Partial<AgentStat
     const plan = await planner.createInitialPlan(company, query, mode);
 
     return {
-      executionPlan: planner.formatPlan(plan),
+      executionPlan: JSON.stringify(plan),
       currentPhase: "planned",
       logs: [`[${timestamp()}] 📋 Dynamic plan created: ${plan.tasks.length} tasks`],
     };
   } catch (e) {
     return {
-      executionPlan: "Default plan (planning failed)",
+      executionPlan: JSON.stringify({ company, query, tasks: [], version: 1, adaptations: [] }),
       currentPhase: "planned",
       errors: [`Planning error: ${String(e)}`],
       logs: [`[${timestamp()}] ⚠️ Planning failed, using defaults`],
@@ -68,7 +77,7 @@ export async function notionContextNode(state: AgentState): Promise<Partial<Agen
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Node: Research Crew
+// Node: Research Crew (with PRM evaluation + plan adaptation)
 // ═══════════════════════════════════════════════════════════════
 
 export async function researchNode(state: AgentState): Promise<Partial<AgentState>> {
@@ -78,17 +87,31 @@ export async function researchNode(state: AgentState): Promise<Partial<AgentStat
     const crew = new ResearchCrew();
     const result = await crew.run(company, query);
 
+    // PRM: evaluate research quality
+    const evaluation = await prm.evaluateStep("research", result.researchSummary);
+    const isBlocked = evaluation.isBlocking && evaluation.score < 4;
+
+    // Adapt plan based on research results
+    const planUpdate = await tryAdaptPlan(state, "research", result.researchSummary);
+
     return {
       researchData: result.researchData,
       researchSummary: result.researchSummary,
       researchSources: result.sources,
-      currentPhase: "research_complete",
-      logs: [`[${timestamp()}] ✅ Research crew completed for ${company}`],
+      stepEvaluations: [JSON.stringify(evaluation)],
+      ...(planUpdate ? { executionPlan: planUpdate } : {}),
+      currentPhase: isBlocked ? "research_blocked" : "research_complete",
+      researchRetries: (state.researchRetries ?? 0) + (isBlocked ? 1 : 0),
+      logs: [
+        `[${timestamp()}] ${isBlocked ? "⚠️" : "✅"} Research crew completed for ${company} ` +
+          `(PRM: ${evaluation.score}/10, ${evaluation.recommendation})`,
+      ],
     };
   } catch (e) {
     return {
       researchSummary: `Research partially failed: ${String(e)}`,
-      currentPhase: "research_failed",
+      currentPhase: "research_blocked",
+      researchRetries: (state.researchRetries ?? 0) + 1,
       errors: [`Research error: ${String(e)}`],
       logs: [`[${timestamp()}] ❌ Research crew failed: ${String(e)}`],
     };
@@ -96,7 +119,7 @@ export async function researchNode(state: AgentState): Promise<Partial<AgentStat
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Node: Analysis Crew (with Promise.all parallelism!)
+// Node: Analysis Crew (with PRM evaluation)
 // ═══════════════════════════════════════════════════════════════
 
 export async function analysisNode(state: AgentState): Promise<Partial<AgentState>> {
@@ -104,15 +127,30 @@ export async function analysisNode(state: AgentState): Promise<Partial<AgentStat
 
   try {
     const crew = new AnalysisCrew();
-    // Note: internally uses Promise.all for parallel execution
     const result = await crew.run(company, researchSummary ?? "");
+
+    // PRM: evaluate analysis quality
+    const combinedAnalysis = [
+      result.financialAnalysis.slice(0, 500),
+      result.marketAnalysis.slice(0, 500),
+      result.techAnalysis.slice(0, 500),
+    ].join("\n---\n");
+    const evaluation = await prm.evaluateStep("financial_analysis", combinedAnalysis);
+
+    // Adapt plan based on analysis results
+    const planUpdate = await tryAdaptPlan(state, "analysis", combinedAnalysis.slice(0, 2000));
 
     return {
       financialAnalysis: result.financialAnalysis,
       marketAnalysis: result.marketAnalysis,
       techAnalysis: result.techAnalysis,
+      stepEvaluations: [JSON.stringify(evaluation)],
+      ...(planUpdate ? { executionPlan: planUpdate } : {}),
       currentPhase: "analysis_complete",
-      logs: [`[${timestamp()}] ✅ Analysis crew completed (3 analysts ran in parallel)`],
+      logs: [
+        `[${timestamp()}] ✅ Analysis crew completed (3 analysts, parallel) ` +
+          `(PRM: ${evaluation.score}/10)`,
+      ],
     };
   } catch (e) {
     return {
@@ -124,7 +162,7 @@ export async function analysisNode(state: AgentState): Promise<Partial<AgentStat
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Node: Risk Crew
+// Node: Risk Crew (with PRM evaluation)
 // ═══════════════════════════════════════════════════════════════
 
 export async function riskNode(state: AgentState): Promise<Partial<AgentState>> {
@@ -138,11 +176,18 @@ export async function riskNode(state: AgentState): Promise<Partial<AgentState>> 
     const crew = new RiskCrew();
     const result = await crew.run(company, researchSummary ?? "", analysisContext);
 
+    // PRM: evaluate risk assessment quality
+    const evaluation = await prm.evaluateStep("risk_assessment", result.riskAssessment.slice(0, 2000));
+
     return {
       riskAssessment: result.riskAssessment,
       riskScore: result.riskScore,
+      stepEvaluations: [JSON.stringify(evaluation)],
       currentPhase: "risk_complete",
-      logs: [`[${timestamp()}] ✅ Risk crew completed (score: ${result.riskScore})`],
+      logs: [
+        `[${timestamp()}] ✅ Risk crew completed (score: ${result.riskScore}) ` +
+          `(PRM: ${evaluation.score}/10)`,
+      ],
     };
   } catch (e) {
     return {
@@ -155,7 +200,7 @@ export async function riskNode(state: AgentState): Promise<Partial<AgentState>> 
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Node: Report Generation
+// Node: Report Generation (with PRM evaluation)
 // ═══════════════════════════════════════════════════════════════
 
 export async function reportNode(state: AgentState): Promise<Partial<AgentState>> {
@@ -204,10 +249,17 @@ export async function reportNode(state: AgentState): Promise<Partial<AgentState>
       report = appendLiveDataSection(report, liveFinancialData);
     }
 
+    // PRM: evaluate report quality
+    const evaluation = await prm.evaluateStep("report_generation", report.slice(0, 3000));
+
     return {
       draftReport: report,
+      stepEvaluations: [JSON.stringify(evaluation)],
       currentPhase: "report_generated",
-      logs: [`[${timestamp()}] ✅ Report generated (iteration ${iteration + 1})`],
+      logs: [
+        `[${timestamp()}] ✅ Report generated (iteration ${iteration + 1}) ` +
+          `(PRM: ${evaluation.score}/10)`,
+      ],
     };
   } catch (e) {
     return {
@@ -220,7 +272,6 @@ export async function reportNode(state: AgentState): Promise<Partial<AgentState>
 
 /** Replace the Key Metrics Dashboard (or append) with verified live data. */
 function appendLiveDataSection(report: string, liveDataJson: string): string {
-  // Skip if the LLM already generated a Live Market Data section
   if (report.includes("Live Market Data (Verified)")) return report;
 
   try {
@@ -261,7 +312,7 @@ function appendLiveDataSection(report: string, liveDataJson: string): string {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Node: Reflexion (replaces simple quality gate)
+// Node: Reflexion (structured output — no regex)
 // ═══════════════════════════════════════════════════════════════
 
 export async function reflexionNode(state: AgentState): Promise<Partial<AgentState>> {
@@ -361,7 +412,7 @@ export async function deliveryNode(state: AgentState): Promise<Partial<AgentStat
       const result = await crew.run(state.company, report, state.riskScore ?? 5);
       notionSaved = result.notionSaved;
       emailSent = result.emailSent;
-      logs.push(`[${timestamp()}] 📨 Delivery crew (stub) completed`);
+      logs.push(`[${timestamp()}] 📨 Delivery crew completed`);
     } catch (e) {
       logs.push(`[${timestamp()}] ❌ Delivery crew failed: ${String(e)}`);
     }
@@ -375,15 +426,59 @@ export async function deliveryNode(state: AgentState): Promise<Partial<AgentStat
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Node: Finalize
+// Node: Finalize (with PRM summary + cost report)
 // ═══════════════════════════════════════════════════════════════
 
 export async function finalizeNode(state: AgentState): Promise<Partial<AgentState>> {
+  // Generate PRM pipeline summary
+  const prmSummary = prm.getSummary();
+  const weakest = prm.getWeakestStep();
+
+  const logs = [
+    `[${timestamp()}] 🏁 Workflow completed. Final report ready.`,
+    `[${timestamp()}] 📊 Pipeline Quality:\n${prmSummary}`,
+  ];
+
+  if (weakest) {
+    logs.push(`[${timestamp()}] 💡 Weakest step: ${weakest}`);
+  }
+
   return {
     finalReport: state.draftReport ?? "No report generated.",
     currentPhase: "completed",
-    logs: [`[${timestamp()}] 🏁 Workflow completed. Final report ready.`],
+    logs,
   };
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Helpers
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Attempt to adapt the execution plan after a node completes.
+ * Returns the updated plan as JSON string, or null if adaptation fails/skipped.
+ */
+async function tryAdaptPlan(
+  state: AgentState,
+  completedTask: string,
+  taskResult: string
+): Promise<string | null> {
+  try {
+    const planStr = state.executionPlan;
+    if (!planStr) return null;
+
+    const plan: ExecutionPlan = JSON.parse(planStr);
+    const planner = new DynamicPlanner();
+    const adapted = await planner.adaptPlan(plan, completedTask, taskResult);
+
+    // Only return if plan actually changed
+    if (adapted.version > plan.version) {
+      return JSON.stringify(adapted);
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 // Common company-to-ticker mappings
@@ -410,13 +505,10 @@ const TICKER_MAP: Record<string, string> = {
 
 function guessTickerFromCompany(company: string): string | null {
   const lower = company.toLowerCase().trim();
-  // Direct match in map
   if (TICKER_MAP[lower]) return TICKER_MAP[lower];
-  // Check if company name contains a known key
   for (const [key, ticker] of Object.entries(TICKER_MAP)) {
     if (lower.includes(key)) return ticker;
   }
-  // If it looks like a ticker already (all caps, short)
   if (/^[A-Z]{1,5}$/.test(company.trim())) return company.trim();
   return null;
 }

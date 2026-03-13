@@ -1,147 +1,105 @@
 /**
- * Agent Crews (LangChain.js)
- * ============================
- * In Python we used CrewAI for team-based agent coordination.
- * In JS there's no CrewAI equivalent, so we implement the same
- * pattern using LangChain.js agents with tool binding.
+ * Agent Crews — Multi-Agent Team Orchestration
+ * =============================================
+ * Each "crew" coordinates specialized ReAct agents that can autonomously
+ * call tools, observe results, and reason over multiple turns.
  *
- * Pattern: Each "crew" is a class that:
- *   1. Creates specialized agents (ChatOpenAI + tools + system prompt)
- *   2. Runs them in sequence, passing context between them
- *   3. Returns structured output for the LangGraph state
- *
- * This is actually cleaner than CrewAI — less magic, more control.
+ * Architecture upgrade: replaced single-turn llm.bindTools().invoke() with
+ * proper ReAct agents via LangGraph's createReactAgent. Each agent now:
+ *   1. Receives a task
+ *   2. Decides which tools to call
+ *   3. Executes tools and observes results
+ *   4. Reasons and decides next action (or produces final answer)
+ *   5. Loops until task is complete
  */
 
-import { HumanMessage, SystemMessage } from "@langchain/core/messages";
-import { LLMConfig, AGENT_ROLES, createLLM, getTodayString } from "../config.js";
+import { LLMConfig } from "../config.js";
+import { buildReactAgent, runReactAgent } from "../agents/reactAgent.js";
 import { getSearchTools } from "../tools/searchTools.js";
 import { getFinanceTools } from "../tools/financeTools.js";
 import { getMcpResearchTools, getMcpDeliveryTools } from "../tools/mcpTools.js";
+import { createLLM } from "../config.js";
+import { HumanMessage, SystemMessage } from "@langchain/core/messages";
+import { z } from "zod";
 
 // ═══════════════════════════════════════════════════════════════
-// Helper: Create a tool-augmented agent
-// ═══════════════════════════════════════════════════════════════
-
-function createAgent(
-  model: string,
-  role: (typeof AGENT_ROLES)[keyof typeof AGENT_ROLES],
-  tools: any[] = []
-) {
-  const llm = createLLM({ model, temperature: LLMConfig.temperature });
-
-  // Bind tools if provided — this enables function calling
-  const agent = tools.length > 0 ? llm.bindTools(tools) : llm;
-
-  const systemPrompt = new SystemMessage(
-    `Today's date: ${getTodayString()}\n\n` +
-      `You are a ${role.role}.\n\n` +
-      `Goal: ${role.goal}\n\n` +
-      `Background: ${role.backstory}\n\n` +
-      `CRITICAL RULES:\n` +
-      `1. ONLY use data returned by your tools. Do NOT fabricate, estimate, or infer data from training knowledge.\n` +
-      `2. If a tool returns no data or fails, explicitly state that the information is unavailable.\n` +
-      `3. When citing numbers, they MUST come from tool results. Never invent financial figures, prices, or statistics.\n` +
-      `4. Always cite the source of your data.\n` +
-      `5. If you lack sufficient data for a section, say so honestly rather than filling it with generic content.`
-  );
-
-  return { agent, systemPrompt };
-}
-
-// ═══════════════════════════════════════════════════════════════
-// Research Crew
+// Research Crew — 3 ReAct agents run sequentially
 // ═══════════════════════════════════════════════════════════════
 
 export class ResearchCrew {
-  /**
-   * Research team: 3 agents run sequentially.
-   *   Researcher → Data Collector → Synthesizer
-   */
-
   async run(company: string, query: string): Promise<{
     researchData: Record<string, unknown>;
     researchSummary: string;
     sources: string[];
   }> {
-    // Agent 1: Web Researcher
-    const researcher = createAgent(
-      LLMConfig.researchModel,
-      AGENT_ROLES.webResearcher,
-      [...getSearchTools(), ...getMcpResearchTools()]
+    // Agent 1: Web Researcher — uses search tools to find real data
+    const researcherAgent = buildReactAgent({
+      model: LLMConfig.researchModel,
+      role: "webResearcher",
+      tools: [...getSearchTools(), ...getMcpResearchTools()],
+    });
+
+    const qualitativeResearch = await runReactAgent(
+      researcherAgent,
+      `Research ${company} thoroughly. Find:\n` +
+        `1. Company overview and business model\n` +
+        `2. Recent news (last 6 months)\n` +
+        `3. Key products/services and revenue drivers\n` +
+        `4. Leadership and strategic decisions\n` +
+        `5. Market position\n\n` +
+        `Additional focus: ${query}`
     );
 
-    const researchResult = await researcher.agent.invoke([
-      researcher.systemPrompt,
-      new HumanMessage(
-        `Research ${company} thoroughly. Find:\n` +
-          `1. Company overview and business model\n` +
-          `2. Recent news (last 6 months)\n` +
-          `3. Key products/services and revenue drivers\n` +
-          `4. Leadership and strategic decisions\n` +
-          `5. Market position\n\n` +
-          `Additional focus: ${query}`
-      ),
-    ]);
+    // Agent 2: Data Collector — uses finance tools to get real numbers
+    const collectorAgent = buildReactAgent({
+      model: LLMConfig.researchModel,
+      role: "dataCollector",
+      tools: getFinanceTools(),
+    });
 
-    // Agent 2: Data Collector
-    const collector = createAgent(
-      LLMConfig.researchModel,
-      AGENT_ROLES.dataCollector,
-      getFinanceTools()
+    const quantitativeData = await runReactAgent(
+      collectorAgent,
+      `Collect financial data for ${company}:\n` +
+        `1. Current valuation metrics (P/E, P/S, market cap)\n` +
+        `2. Revenue and earnings trends\n` +
+        `3. Margins (gross, operating, net)\n` +
+        `4. Balance sheet health\n` +
+        `5. Analyst consensus and price targets`
     );
 
-    const dataResult = await collector.agent.invoke([
-      collector.systemPrompt,
-      new HumanMessage(
-        `Collect financial data for ${company}:\n` +
-          `1. Current valuation metrics (P/E, P/S, market cap)\n` +
-          `2. Revenue and earnings trends\n` +
-          `3. Margins (gross, operating, net)\n` +
-          `4. Balance sheet health\n` +
-          `5. Analyst consensus and price targets`
-      ),
-    ]);
+    // Agent 3: Synthesizer — no tools, pure reasoning over collected data
+    const synthesizerAgent = buildReactAgent({
+      model: LLMConfig.researchModel,
+      role: "summarizer",
+      tools: [], // No tools — synthesizes from provided data
+    });
 
-    // Agent 3: Synthesizer
-    const synthesizer = createAgent(
-      LLMConfig.researchModel,
-      AGENT_ROLES.summarizer
+    const researchSummary = await runReactAgent(
+      synthesizerAgent,
+      `Synthesize the following research and data for ${company}:\n\n` +
+        `=== QUALITATIVE RESEARCH ===\n${qualitativeResearch}\n\n` +
+        `=== QUANTITATIVE DATA ===\n${quantitativeData}\n\n` +
+        `Create a 500-800 word intelligence brief highlighting:\n` +
+        `1. Top 5 findings\n2. Key strengths and concerns\n` +
+        `3. Contradictions or gaps\n4. Preliminary assessment`
     );
-
-    const synthesisResult = await synthesizer.agent.invoke([
-      synthesizer.systemPrompt,
-      new HumanMessage(
-        `Synthesize the following research and data for ${company}:\n\n` +
-          `=== QUALITATIVE RESEARCH ===\n${typeof researchResult.content === 'string' ? researchResult.content : JSON.stringify(researchResult.content)}\n\n` +
-          `=== QUANTITATIVE DATA ===\n${typeof dataResult.content === 'string' ? dataResult.content : JSON.stringify(dataResult.content)}\n\n` +
-          `Create a 500-800 word intelligence brief highlighting:\n` +
-          `1. Top 5 findings\n2. Key strengths and concerns\n` +
-          `3. Contradictions or gaps\n4. Preliminary assessment`
-      ),
-    ]);
 
     return {
       researchData: {
-        qualitative: typeof researchResult.content === 'string' ? researchResult.content : JSON.stringify(researchResult.content),
-        quantitative: typeof dataResult.content === 'string' ? dataResult.content : JSON.stringify(dataResult.content),
+        qualitative: qualitativeResearch,
+        quantitative: quantitativeData,
       },
-      researchSummary: typeof synthesisResult.content === 'string' ? synthesisResult.content : JSON.stringify(synthesisResult.content),
+      researchSummary,
       sources: [],
     };
   }
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Analysis Crew
+// Analysis Crew — 3 ReAct analysts run in PARALLEL
 // ═══════════════════════════════════════════════════════════════
 
 export class AnalysisCrew {
-  /**
-   * Analysis team: 3 specialized analysts.
-   * Could run in parallel (Promise.all) for speed.
-   */
-
   async run(company: string, researchSummary: string): Promise<{
     financialAnalysis: string;
     marketAnalysis: string;
@@ -150,83 +108,83 @@ export class AnalysisCrew {
     const contextBlock =
       `=== RESEARCH CONTEXT ===\n${researchSummary}\n=== END ===\n\n`;
 
-    // Run all three analysts in PARALLEL (key JS advantage!)
-    const [financialResult, marketResult, techResult] = await Promise.all([
+    // Run all three analysts in PARALLEL
+    const [financialAnalysis, marketAnalysis, techAnalysis] = await Promise.all([
       this.runFinancialAnalyst(company, contextBlock),
       this.runMarketAnalyst(company, contextBlock),
       this.runTechAnalyst(company, contextBlock),
     ]);
 
-    return {
-      financialAnalysis: financialResult,
-      marketAnalysis: marketResult,
-      techAnalysis: techResult,
-    };
+    return { financialAnalysis, marketAnalysis, techAnalysis };
   }
 
   private async runFinancialAnalyst(company: string, context: string): Promise<string> {
-    const { agent, systemPrompt } = createAgent(
-      LLMConfig.analysisModel,
-      AGENT_ROLES.financialAnalyst,
-      getFinanceTools()
-    );
+    const agent = buildReactAgent({
+      model: LLMConfig.analysisModel,
+      role: "financialAnalyst",
+      tools: getFinanceTools(),
+    });
 
-    const result = await agent.invoke([
-      systemPrompt,
-      new HumanMessage(
-        `${context}Perform deep financial analysis of ${company}:\n` +
-          `1. Valuation: overvalued/undervalued vs industry/historical\n` +
-          `2. Growth: revenue CAGR, earnings trajectory\n` +
-          `3. Profitability: margin trends, ROIC\n` +
-          `4. Balance sheet: debt, cash generation\n` +
-          `5. Bull/base/bear case price targets`
-      ),
-    ]);
-    return typeof result.content === 'string' ? result.content : JSON.stringify(result.content);
+    return runReactAgent(
+      agent,
+      `${context}Perform deep financial analysis of ${company}:\n` +
+        `1. Valuation: overvalued/undervalued vs industry/historical\n` +
+        `2. Growth: revenue CAGR, earnings trajectory\n` +
+        `3. Profitability: margin trends, ROIC\n` +
+        `4. Balance sheet: debt, cash generation\n` +
+        `5. Bull/base/bear case price targets`
+    );
   }
 
   private async runMarketAnalyst(company: string, context: string): Promise<string> {
-    const { agent, systemPrompt } = createAgent(
-      LLMConfig.analysisModel,
-      AGENT_ROLES.marketAnalyst,
-      getSearchTools()
-    );
+    const agent = buildReactAgent({
+      model: LLMConfig.analysisModel,
+      role: "marketAnalyst",
+      tools: getSearchTools(),
+    });
 
-    const result = await agent.invoke([
-      systemPrompt,
-      new HumanMessage(
-        `${context}Analyze ${company}'s market position:\n` +
-          `1. TAM/SAM/SOM\n2. Competitive moat\n` +
-          `3. Porter's Five Forces\n4. Top 3-5 competitors\n` +
-          `5. Market tailwinds and headwinds`
-      ),
-    ]);
-    return typeof result.content === 'string' ? result.content : JSON.stringify(result.content);
+    return runReactAgent(
+      agent,
+      `${context}Analyze ${company}'s market position:\n` +
+        `1. TAM/SAM/SOM\n2. Competitive moat\n` +
+        `3. Porter's Five Forces\n4. Top 3-5 competitors\n` +
+        `5. Market tailwinds and headwinds`
+    );
   }
 
   private async runTechAnalyst(company: string, context: string): Promise<string> {
-    const { agent, systemPrompt } = createAgent(
-      LLMConfig.analysisModel,
-      AGENT_ROLES.techAnalyst,
-      getSearchTools()
-    );
+    const agent = buildReactAgent({
+      model: LLMConfig.analysisModel,
+      role: "techAnalyst",
+      tools: getSearchTools(),
+    });
 
-    const result = await agent.invoke([
-      systemPrompt,
-      new HumanMessage(
-        `${context}Evaluate ${company}'s technology:\n` +
-          `1. Core technology stack\n2. R&D investment\n` +
-          `3. Innovation pipeline\n4. Technology moat\n` +
-          `5. Disruption risks`
-      ),
-    ]);
-    return typeof result.content === 'string' ? result.content : JSON.stringify(result.content);
+    return runReactAgent(
+      agent,
+      `${context}Evaluate ${company}'s technology:\n` +
+        `1. Core technology stack\n2. R&D investment\n` +
+        `3. Innovation pipeline\n4. Technology moat\n` +
+        `5. Disruption risks`
+    );
   }
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Risk Crew
+// Risk Crew — 2 ReAct agents + structured risk score output
 // ═══════════════════════════════════════════════════════════════
+
+/** Zod schema for structured risk score extraction */
+const RiskScoreSchema = z.object({
+  overallScore: z.number().min(1).max(10).describe("Overall risk score from 1 (low risk) to 10 (high risk)"),
+  dimensions: z.object({
+    market: z.number().min(1).max(10),
+    operational: z.number().min(1).max(10),
+    competitive: z.number().min(1).max(10),
+    financial: z.number().min(1).max(10),
+    geopolitical: z.number().min(1).max(10),
+  }),
+  summary: z.string().describe("One-paragraph risk summary"),
+});
 
 export class RiskCrew {
   async run(
@@ -238,67 +196,69 @@ export class RiskCrew {
       `=== RESEARCH ===\n${researchSummary}\n\n` +
       `=== ANALYSIS ===\n${analysisContext}\n=== END ===\n\n`;
 
-    // Risk Analyst
-    const riskAgent = createAgent(
-      LLMConfig.analysisModel,
-      AGENT_ROLES.riskAnalyst,
-      getSearchTools()
+    // Agent 1: Risk Analyst — uses search tools for current risk data
+    const riskAgent = buildReactAgent({
+      model: LLMConfig.analysisModel,
+      role: "riskAnalyst",
+      tools: getSearchTools(),
+    });
+
+    const riskContent = await runReactAgent(
+      riskAgent,
+      `${context}Risk assessment for ${company}:\n` +
+        `1. Market Risk (severity/likelihood/impact/mitigants)\n` +
+        `2. Operational Risk\n3. Competitive Risk\n` +
+        `4. Financial Risk\n5. Geopolitical Risk\n\n` +
+        `Provide detailed analysis for each risk dimension.`
     );
 
-    const riskResult = await riskAgent.agent.invoke([
-      riskAgent.systemPrompt,
-      new HumanMessage(
-        `${context}Risk assessment for ${company}:\n` +
-          `1. Market Risk (severity/likelihood/impact/mitigants)\n` +
-          `2. Operational Risk\n3. Competitive Risk\n` +
-          `4. Financial Risk\n5. Geopolitical Risk\n\n` +
-          `End with overall risk score 1-10.`
-      ),
-    ]);
+    // Agent 2: Compliance Analyst — adds regulatory analysis
+    const complianceAgent = buildReactAgent({
+      model: LLMConfig.analysisModel,
+      role: "complianceAnalyst",
+      tools: getSearchTools(),
+    });
 
-    // Compliance Analyst
-    const complianceAgent = createAgent(
-      LLMConfig.analysisModel,
-      AGENT_ROLES.complianceAnalyst,
-      getSearchTools()
+    const riskAssessment = await runReactAgent(
+      complianceAgent,
+      `${context}\n=== RISK ANALYSIS ===\n${riskContent}\n\n` +
+        `Add regulatory analysis for ${company}:\n` +
+        `1. Regulatory environment\n2. Pending legislation\n` +
+        `3. Antitrust risk\n4. Data privacy\n` +
+        `5. ESG\n6. International compliance\n\n` +
+        `Create unified risk picture.`
     );
 
-    const riskContent = typeof riskResult.content === 'string' ? riskResult.content : JSON.stringify(riskResult.content);
+    // Extract structured risk score via LLM with structured output
+    const riskScore = await this.extractStructuredRiskScore(company, riskAssessment);
 
-    const complianceResult = await complianceAgent.agent.invoke([
-      complianceAgent.systemPrompt,
-      new HumanMessage(
-        `${context}\n=== RISK ANALYSIS ===\n${riskContent}\n\n` +
-          `Add regulatory analysis for ${company}:\n` +
-          `1. Regulatory environment\n2. Pending legislation\n` +
-          `3. Antitrust risk\n4. Data privacy\n` +
-          `5. ESG\n6. International compliance\n\n` +
-          `Create unified risk picture.`
-      ),
-    ]);
-
-    const complianceContent = typeof complianceResult.content === 'string' ? complianceResult.content : JSON.stringify(complianceResult.content);
-
-    return {
-      riskAssessment: complianceContent,
-      riskScore: this.extractRiskScore(complianceContent),
-    };
+    return { riskAssessment, riskScore };
   }
 
-  private extractRiskScore(text: string): number {
-    const patterns = [
-      /risk\s*score[:\s]+(\d+\.?\d*)/i,
-      /overall[:\s]+(\d+\.?\d*)\s*\/\s*10/i,
-      /(\d+\.?\d*)\s*\/\s*10/,
-    ];
-    for (const pattern of patterns) {
-      const match = text.match(pattern);
-      if (match) {
-        const score = parseFloat(match[1]);
-        if (score >= 1 && score <= 10) return score;
-      }
+  /**
+   * Use LLM structured output (Zod schema) to extract a reliable risk score.
+   * Replaces fragile regex parsing.
+   */
+  private async extractStructuredRiskScore(company: string, riskAssessment: string): Promise<number> {
+    try {
+      const llm = createLLM({ model: LLMConfig.analysisModel, temperature: 0 });
+      const structuredLLM = llm.withStructuredOutput(RiskScoreSchema);
+
+      const result = await structuredLLM.invoke([
+        new SystemMessage(
+          "You are a risk scoring specialist. Extract a structured risk score from the provided risk assessment. " +
+          "Score each dimension from 1 (low risk) to 10 (high risk)."
+        ),
+        new HumanMessage(
+          `Extract structured risk scores for ${company} from this assessment:\n\n${riskAssessment.slice(0, 4000)}`
+        ),
+      ]);
+
+      return result.overallScore;
+    } catch {
+      // Fallback: if structured output fails, default to moderate risk
+      return 5.0;
     }
-    return 5.0;
   }
 }
 
@@ -317,47 +277,64 @@ export class DeliveryCrew {
     emailSent: boolean;
     meetingScheduled: boolean;
   }> {
-    // Knowledge Manager Agent
-    const kmAgent = createAgent(
-      LLMConfig.researchModel,
-      AGENT_ROLES.knowledgeManager,
-      [getMcpDeliveryTools()[0]] // notion_save_analysis
-    );
+    let notionSaved = false;
+    let emailSent = false;
+    let meetingScheduled = false;
 
-    await kmAgent.agent.invoke([
-      kmAgent.systemPrompt,
-      new HumanMessage(
-        `Save the ${company} investment analysis to Notion.\n` +
-          `Title: "${company} Investment Analysis"\n` +
-          `Tags: relevant sector tags\n` +
-          `Risk Score: ${riskScore}/10\n\n` +
-          `Report: ${report.slice(0, 2000)}`
-      ),
-    ]);
+    // Knowledge Manager Agent — saves to Notion
+    try {
+      const mcpDeliveryTools = getMcpDeliveryTools();
+      if (mcpDeliveryTools.length > 0) {
+        const kmAgent = buildReactAgent({
+          model: LLMConfig.researchModel,
+          role: "knowledgeManager",
+          tools: [mcpDeliveryTools[0]],
+        });
 
-    // Distribution Coordinator Agent
-    const distAgent = createAgent(
-      LLMConfig.researchModel,
-      AGENT_ROLES.distributionCoordinator,
-      getMcpDeliveryTools().slice(1) // gmail + calendar tools
-    );
+        await runReactAgent(
+          kmAgent,
+          `Save the ${company} investment analysis to Notion.\n` +
+            `Title: "${company} Investment Analysis"\n` +
+            `Tags: relevant sector tags\n` +
+            `Risk Score: ${riskScore}/10\n\n` +
+            `Report: ${report.slice(0, 2000)}`
+        );
+        notionSaved = true;
+      }
+    } catch {
+      // Notion save failed — non-fatal
+    }
 
-    await distAgent.agent.invoke([
-      distAgent.systemPrompt,
-      new HumanMessage(
-        `Distribute ${company} analysis:\n` +
-          `1. Email report to team@company.com\n` +
-          `2. Schedule 30-min review meeting\n` +
-          `3. Set follow-up reminders for key dates\n\n` +
-          `Report summary: ${report.slice(0, 1500)}`
-      ),
-    ]);
+    // Distribution Coordinator Agent — sends email, schedules meetings
+    try {
+      const mcpDeliveryTools = getMcpDeliveryTools();
+      if (mcpDeliveryTools.length > 1) {
+        const distAgent = buildReactAgent({
+          model: LLMConfig.researchModel,
+          role: "distributionCoordinator",
+          tools: mcpDeliveryTools.slice(1),
+        });
+
+        await runReactAgent(
+          distAgent,
+          `Distribute ${company} analysis:\n` +
+            `1. Email report to team@company.com\n` +
+            `2. Schedule 30-min review meeting\n` +
+            `3. Set follow-up reminders for key dates\n\n` +
+            `Report summary: ${report.slice(0, 1500)}`
+        );
+        emailSent = true;
+        meetingScheduled = true;
+      }
+    } catch {
+      // Distribution failed — non-fatal
+    }
 
     return {
-      deliveryStatus: "completed",
-      notionSaved: true,
-      emailSent: true,
-      meetingScheduled: true,
+      deliveryStatus: notionSaved || emailSent ? "completed" : "skipped",
+      notionSaved,
+      emailSent,
+      meetingScheduled,
     };
   }
 }

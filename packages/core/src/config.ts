@@ -16,9 +16,11 @@ export function getTodayString(): string {
 }
 
 export const LLMConfig = {
+  planningModel: process.env.PLANNING_MODEL ?? "deepseek-chat",
   researchModel: process.env.RESEARCH_MODEL ?? "deepseek-chat",
   analysisModel: process.env.ANALYSIS_MODEL ?? "deepseek-chat",
   reportModel: process.env.REPORT_MODEL ?? "deepseek-chat",
+  evaluationModel: process.env.EVALUATION_MODEL ?? "deepseek-chat",
   temperature: 0.1,
 } as const;
 

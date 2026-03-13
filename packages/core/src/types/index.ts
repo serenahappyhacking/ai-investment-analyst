@@ -70,6 +70,13 @@ export const AgentStateAnnotation = Annotation.Root({
   humanFeedback: Annotation<string>,
   iterationCount: Annotation<number>,
 
+  // ── Retry Counters (error-aware routing) ───────────────
+  researchRetries: Annotation<number>,
+  analysisRetries: Annotation<number>,
+
+  // ── Cost Tracking ──────────────────────────────────────
+  costReport: Annotation<string>,
+
   // ── Metadata ──────────────────────────────────────────
   errors: Annotation<string[]>({
     reducer: (a, b) => [...(a ?? []), ...b],

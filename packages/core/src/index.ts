@@ -30,3 +30,8 @@ export { isEmailConfigured, sendReportEmail } from "./integrations/emailClient.j
 
 // ── Agents ────────────────────────────────────────────────────
 export { ReportWriterAgent } from "./agents/reportWriter.js";
+export { buildReactAgent, runReactAgent } from "./agents/reactAgent.js";
+
+// ── Skills ────────────────────────────────────────────────────
+export { ProcessRewardModel } from "./skills/processReward.js";
+export { CostTracker } from "./skills/costTracker.js";

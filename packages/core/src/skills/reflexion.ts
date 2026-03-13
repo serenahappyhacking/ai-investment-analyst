@@ -3,14 +3,41 @@
  * =========================================
  * TypeScript implementation of Reflexion (Shinn et al., 2023).
  *
+ * Architecture upgrade: replaced regex-based score extraction with
+ * LLM structured output (Zod schema). Scores are now guaranteed to be
+ * valid numbers, and action items are properly typed arrays.
+ *
  * Pattern:
- *   Execute → Evaluate (structured rubric) → Reflect (root cause) →
+ *   Execute → Evaluate (structured output) → Reflect (structured output) →
  *   Store lessons → Retry with accumulated wisdom
  */
 
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { createLLM } from "../config.js";
+import { z } from "zod";
 import type { ReflectionEntry } from "../types/index.js";
+
+// ── Structured Output Schemas ───────────────────────────────
+
+const EvaluationSchema = z.object({
+  completeness: z.number().min(0).max(2).describe("Score for all sections present with substance"),
+  dataQuality: z.number().min(0).max(2).describe("Score for specific, current, sourced numbers"),
+  analyticalDepth: z.number().min(0).max(2).describe("Score for beyond-surface, multi-perspective analysis"),
+  actionability: z.number().min(0).max(2).describe("Score for clear recommendation and price targets"),
+  writingQuality: z.number().min(0).max(2).describe("Score for professional tone and logical flow"),
+  overall: z.number().min(1).max(10).describe("Total score summing all dimensions"),
+  reasoning: z.string().describe("Brief explanation of the scoring"),
+});
+
+const ReflectionSchema = z.object({
+  rootCauses: z.array(z.string()).max(3).describe("1-2 root causes of the score"),
+  whatWorkedWell: z.string().describe("What to preserve from the current output"),
+  actionItems: z.array(z.string()).max(5).describe("Specific, actionable improvements for next attempt"),
+  priority: z.string().describe("Single highest-impact item to address first"),
+  shouldRetry: z.boolean().describe("Whether the output should be regenerated"),
+});
+
+// ── Reflexion Memory ────────────────────────────────────────
 
 export class ReflexionMemory {
   private reflections: ReflectionEntry[] = [];
@@ -37,7 +64,7 @@ export class ReflexionMemory {
         (r) =>
           `--- Attempt #${r.attemptNumber} (Score: ${r.score}/10) ---\n` +
           `Reflection: ${r.reflection}\n` +
-          `Action Items:\n${r.actionItems.map((a) => `  • ${a}`).join("\n")}`
+          `Action Items:\n${r.actionItems.map((a) => `  - ${a}`).join("\n")}`
       )
       .join("\n\n");
   }
@@ -48,6 +75,8 @@ export class ReflexionMemory {
       : 0;
   }
 }
+
+// ── Reflexion Engine ────────────────────────────────────────
 
 export class ReflexionEngine {
   private llm: ReturnType<typeof createLLM>;
@@ -70,50 +99,88 @@ export class ReflexionEngine {
     shouldRetry: boolean;
     pastReflections: string;
   }> {
-    // Step 1: Evaluate with structured rubric
-    const evalResult = await this.llm.invoke([
-      new SystemMessage(EVALUATOR_PROMPT),
-      new HumanMessage(
-        `Task: ${task}\n\n` +
-          `Output to evaluate:\n${output.slice(0, 4000)}\n\n` +
-          `Previous reflections:\n${this.memory.formatForPrompt()}\n\n` +
-          `Evaluate with the structured rubric.`
-      ),
-    ]);
+    // Step 1: Evaluate with structured output (no regex needed)
+    const evaluatorLLM = this.llm.withStructuredOutput(EvaluationSchema);
 
-    const evaluation = typeof evalResult.content === 'string' ? evalResult.content : String(evalResult.content);
-    const score = extractScore(evaluation);
+    let evaluation: z.infer<typeof EvaluationSchema>;
+    try {
+      evaluation = await evaluatorLLM.invoke([
+        new SystemMessage(EVALUATOR_PROMPT),
+        new HumanMessage(
+          `Task: ${task}\n\n` +
+            `Output to evaluate:\n${output.slice(0, 4000)}\n\n` +
+            `Previous reflections:\n${this.memory.formatForPrompt()}\n\n` +
+            `Evaluate with the structured rubric.`
+        ),
+      ]);
+    } catch {
+      // Structured output parsing failed — use safe defaults
+      evaluation = {
+        completeness: 1, dataQuality: 1, analyticalDepth: 1,
+        actionability: 1, writingQuality: 1, overall: 5,
+        reasoning: "Evaluation parsing failed, using default scores.",
+      };
+    }
 
-    // Step 2: Generate reflection
-    const reflectResult = await this.llm.invoke([
-      new SystemMessage(REFLECTOR_PROMPT),
-      new HumanMessage(
-        `Task: ${task}\n\nOutput:\n${output.slice(0, 3000)}\n\n` +
-          `Evaluation:\n${evaluation}\n\nScore: ${score}/10\n\n` +
-          `Generate a structured reflection with specific action items.`
-      ),
-    ]);
+    const score = Math.min(10, Math.max(1, evaluation.overall));
 
-    const reflection = typeof reflectResult.content === 'string' ? reflectResult.content : String(reflectResult.content);
-    const actionItems = extractActionItems(reflection);
+    // Step 2: Reflect with structured output
+    const reflectorLLM = this.llm.withStructuredOutput(ReflectionSchema);
+
+    let reflection: z.infer<typeof ReflectionSchema>;
+    try {
+      reflection = await reflectorLLM.invoke([
+        new SystemMessage(REFLECTOR_PROMPT),
+        new HumanMessage(
+          `Task: ${task}\n\nOutput:\n${output.slice(0, 3000)}\n\n` +
+            `Evaluation:\n${JSON.stringify(evaluation)}\n\nScore: ${score}/10\n\n` +
+            `Generate a structured reflection with specific action items.`
+        ),
+      ]);
+    } catch {
+      reflection = {
+        rootCauses: ["Reflection parsing failed"],
+        whatWorkedWell: "Unable to determine",
+        actionItems: ["Retry with improved data"],
+        priority: "Retry with improved data",
+        shouldRetry: score < 7.0 && attemptNumber < 3,
+      };
+    }
 
     // Step 3: Store in memory
+    const reflectionText = [
+      `Root causes: ${reflection.rootCauses.join("; ")}`,
+      `What worked: ${reflection.whatWorkedWell}`,
+      `Priority: ${reflection.priority}`,
+    ].join("\n");
+
     this.memory.add({
       attemptNumber,
       taskDescription: task.slice(0, 200),
       outputSummary: output.slice(0, 300),
       score,
-      reflection,
-      actionItems,
+      reflection: reflectionText,
+      actionItems: reflection.actionItems,
       timestamp: new Date().toISOString(),
     });
 
+    // Format evaluation as readable string for logs
+    const evaluationText = [
+      `COMPLETENESS: ${evaluation.completeness}/2`,
+      `DATA_QUALITY: ${evaluation.dataQuality}/2`,
+      `ANALYTICAL_DEPTH: ${evaluation.analyticalDepth}/2`,
+      `ACTIONABILITY: ${evaluation.actionability}/2`,
+      `WRITING_QUALITY: ${evaluation.writingQuality}/2`,
+      `OVERALL: ${score}/10`,
+      `Reasoning: ${evaluation.reasoning}`,
+    ].join("\n");
+
     return {
       score,
-      evaluation,
-      reflection,
-      actionItems,
-      shouldRetry: score < 7.0 && attemptNumber < 3,
+      evaluation: evaluationText,
+      reflection: reflectionText,
+      actionItems: reflection.actionItems,
+      shouldRetry: reflection.shouldRetry && attemptNumber < 3,
       pastReflections: this.memory.formatForPrompt(),
     };
   }
@@ -121,32 +188,6 @@ export class ReflexionEngine {
   getImprovementContext(): string {
     return this.memory.formatForPrompt();
   }
-}
-
-// ── Helpers ──────────────────────────────────────────────────
-
-function extractScore(text: string): number {
-  const patterns = [/OVERALL[:\s]+(\d+\.?\d*)/i, /Score[:\s]+(\d+\.?\d*)/i, /(\d+\.?\d*)\s*\/\s*10/];
-  for (const pattern of patterns) {
-    const match = text.match(pattern);
-    if (match) return Math.min(10, Math.max(1, parseFloat(match[1])));
-  }
-  return 5.0;
-}
-
-function extractActionItems(text: string): string[] {
-  const items: string[] = [];
-  const patterns = [/[•\-*]\s*(.+?)(?:\n|$)/g, /\d+\.\s*(.+?)(?:\n|$)/g];
-  for (const pattern of patterns) {
-    let match;
-    while ((match = pattern.exec(text)) !== null) {
-      const item = match[1].trim();
-      if (item.length > 10 && !items.includes(item)) {
-        items.push(item);
-      }
-    }
-  }
-  return items.slice(0, 5);
 }
 
 // ── Prompts ─────────────────────────────────────────────────
@@ -162,26 +203,13 @@ Evaluate using this STRUCTURED RUBRIC:
 
 If previous reflections exist, check if past issues were addressed.
 
-Format:
-COMPLETENESS: [score]/2 - [reason]
-DATA_QUALITY: [score]/2 - [reason]
-ANALYTICAL_DEPTH: [score]/2 - [reason]
-ACTIONABILITY: [score]/2 - [reason]
-WRITING_QUALITY: [score]/2 - [reason]
-OVERALL: [total]/10`;
+The overall score should be the sum of all dimension scores (max 10).`;
 
 const REFLECTOR_PROMPT = `You are a meta-cognitive reflection specialist.
 
 Analyze WHY the output scored as it did. Generate SPECIFIC action items.
 
-BAD:  "Add more financial data"
-GOOD: "Include Q1-Q4 2024 quarterly revenue with YoY growth %"
+BAD action item:  "Add more financial data"
+GOOD action item: "Include Q1-Q4 2024 quarterly revenue with YoY growth %"
 
-Format:
-ROOT CAUSE ANALYSIS: [1-2 root causes]
-WHAT WORKED WELL: [preserve this]
-ACTION ITEMS FOR NEXT ATTEMPT:
-• [specific improvement 1]
-• [specific improvement 2]
-• [specific improvement 3]
-PRIORITY: [highest impact item]`;
+Focus on the highest-impact improvements first.`;
