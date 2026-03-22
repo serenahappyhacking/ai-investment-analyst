@@ -17,7 +17,7 @@ import { LLMConfig } from "../config.js";
 import { buildReactAgent, runReactAgent } from "../agents/reactAgent.js";
 import { getSearchTools } from "../tools/searchTools.js";
 import { getFinanceTools } from "../tools/financeTools.js";
-import { getMcpResearchTools, getMcpDeliveryTools } from "../tools/mcpTools.js";
+import { getMcpResearchTools, getMcpDeliveryTools, getHKComplianceTools } from "../tools/mcpTools.js";
 import { createLLM } from "../config.js";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { z } from "zod";
@@ -173,7 +173,7 @@ export class AnalysisCrew {
 // Risk Crew — 2 ReAct agents + structured risk score output
 // ═══════════════════════════════════════════════════════════════
 
-/** Zod schema for structured risk score extraction */
+/** Zod schema for structured risk score extraction (6 dimensions) */
 const RiskScoreSchema = z.object({
   overallScore: z.number().min(1).max(10).describe("Overall risk score from 1 (low risk) to 10 (high risk)"),
   dimensions: z.object({
@@ -182,6 +182,7 @@ const RiskScoreSchema = z.object({
     competitive: z.number().min(1).max(10),
     financial: z.number().min(1).max(10),
     geopolitical: z.number().min(1).max(10),
+    regulatory: z.number().min(1).max(10).describe("Regulatory & compliance risk (HKMA, SFC, PDPO, SEC, etc.)"),
   }),
   summary: z.string().describe("One-paragraph risk summary"),
 });
@@ -212,11 +213,11 @@ export class RiskCrew {
         `Provide detailed analysis for each risk dimension.`
     );
 
-    // Agent 2: Compliance Analyst — adds regulatory analysis
+    // Agent 2: Compliance Analyst — adds regulatory analysis with HK compliance tools
     const complianceAgent = buildReactAgent({
       model: LLMConfig.analysisModel,
       role: "complianceAnalyst",
-      tools: getSearchTools(),
+      tools: [...getSearchTools(), ...getHKComplianceTools()],
     });
 
     const riskAssessment = await runReactAgent(

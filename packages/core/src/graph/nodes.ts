@@ -16,6 +16,7 @@ import { ReportWriterAgent } from "../agents/reportWriter.js";
 import { DynamicPlanner, type ExecutionPlan } from "../skills/dynamicPlanner.js";
 import { ReflexionEngine } from "../skills/reflexion.js";
 import { ProcessRewardModel } from "../skills/processReward.js";
+import { globalCostTracker } from "../skills/costTracker.js";
 import { notionSearchPastAnalyses } from "../tools/mcpTools.js";
 import { getStockInfo } from "../tools/financeTools.js";
 import {
@@ -434,6 +435,10 @@ export async function finalizeNode(state: AgentState): Promise<Partial<AgentStat
   const prmSummary = prm.getSummary();
   const weakest = prm.getWeakestStep();
 
+  // Generate cost report from live cost tracking
+  const costReport = globalCostTracker.generateReport();
+  const costFormatted = globalCostTracker.formatReport();
+
   const logs = [
     `[${timestamp()}] 🏁 Workflow completed. Final report ready.`,
     `[${timestamp()}] 📊 Pipeline Quality:\n${prmSummary}`,
@@ -443,8 +448,11 @@ export async function finalizeNode(state: AgentState): Promise<Partial<AgentStat
     logs.push(`[${timestamp()}] 💡 Weakest step: ${weakest}`);
   }
 
+  logs.push(`[${timestamp()}] 💰 Cost: $${costReport.totalCost.toFixed(4)} | ${costReport.totalTokens.toLocaleString()} tokens | ${costReport.totalCalls} API calls`);
+
   return {
     finalReport: state.draftReport ?? "No report generated.",
+    costReport: costFormatted,
     currentPhase: "completed",
     logs,
   };

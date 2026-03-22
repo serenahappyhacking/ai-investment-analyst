@@ -93,3 +93,27 @@ body {
 html {
   transition: background-color 0.2s ease, color 0.2s ease;
 }
+
+/* Pipeline DAG animations */
+@keyframes pipeline-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+.pipeline-pulse-ring {
+  animation: pipeline-pulse 1.5s ease-in-out infinite;
+}
+.pipeline-node-active rect:first-child {
+  filter: drop-shadow(0 0 6px var(--primary));
+}
+
+/* Execution log auto-scroll */
+.execution-log-scroll {
+  scroll-behavior: smooth;
+}
+.execution-log-scroll::-webkit-scrollbar {
+  width: 4px;
+}
+.execution-log-scroll::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 2px;
+}

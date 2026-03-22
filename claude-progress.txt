@@ -3,16 +3,37 @@
 # Do NOT manually edit unless correcting an error.
 
 ## Last Updated
-(not yet initialized)
+2026-03-22 17:00 UTC
 
 ## Current State
-- Project initialized but progress tracking not yet active
+- Phase 1 of strategic redesign COMPLETE (narrative reframe + CostTracker wiring)
+- Type-check passes across all 4 packages
+- PRM and DynamicPlanner confirmed ALREADY wired (earlier assessment was wrong)
+- CostTracker now live: records all LLM calls via LangChain callbacks, emits real cost_update events
 
 ## What Was Completed
-(none yet)
+
+### Strategic Redesign Phase 1
+- **Narrative reframe**: AGENTS.md, README.md, fin-intel-mcp/README.md
+  - "4-crew/10-agent" → "4 Skill Domains, skill-composition platform"
+  - Added "Skill Layer: fin-intel-mcp" section to README
+  - Added "Compliance-as-Infrastructure" framing
+  - Renamed Crew → Skill Domain throughout
+- **CostTracker wired into pipeline**:
+  - Added DeepSeek/Claude pricing to MODEL_PRICING
+  - Exported `globalCostTracker` singleton
+  - `createLLM()` now attaches cost-tracking callbacks via LangChain `callbacks` option
+  - `finalizeNode()` generates cost report from live tracker data
+  - `workflow.ts` emits real `cost_update` PipelineEvent from globalCostTracker
+- **Confirmed**: PRM `evaluateStep()` and DynamicPlanner `adaptPlan()` ARE called in nodes.ts
+
+### Previous: Pipeline Visualization
+- PipelineEvent system, SSE streaming, demo playback, DAG, execution log, cost summary card
 
 ## What Is Blocked
-(nothing currently)
+- Nothing currently
 
-## Next Steps
-(awaiting first tracked session)
+## Next Steps (Phase 2-3 of strategic redesign)
+- **Phase 2A**: Build 3 HK regulatory compliance MCP tools in fin-intel-mcp (check_hk_compliance, search_hkex_filings, assess_cross_border_risk)
+- **Phase 2B**: Wire HK compliance tools into ai-investment-analyst (mcpTools, RiskCrew, 6-dim RiskScoreSchema, boundary tests)
+- **Phase 3**: HK demo trace (Tencent), skill_invocation event type, SkillsPanel component, demo selector, ticker grouping

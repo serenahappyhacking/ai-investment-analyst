@@ -7,11 +7,17 @@
 import type { LLMCallRecord, CostReport } from "../types/index.js";
 
 const MODEL_PRICING: Record<string, { input: number; output: number }> = {
+  // DeepSeek
+  "deepseek-chat": { input: 0.14, output: 0.28 },
+  "deepseek-reasoner": { input: 0.55, output: 2.19 },
+  // OpenAI
   "gpt-4o": { input: 2.5, output: 10.0 },
   "gpt-4o-mini": { input: 0.15, output: 0.6 },
   "gpt-4-turbo": { input: 10.0, output: 30.0 },
+  // Anthropic
   "claude-sonnet-4-5": { input: 3.0, output: 15.0 },
   "claude-haiku-4-5": { input: 0.8, output: 4.0 },
+  "claude-opus-4-6": { input: 15.0, output: 75.0 },
 };
 
 export interface CostBudget {
@@ -164,4 +170,16 @@ export class CostTracker {
 
     return recs;
   }
+
+  /** Get per-agent cost breakdown as a flat Record<string, number> for PipelineEvent */
+  getAgentCostMap(): Record<string, number> {
+    const map: Record<string, number> = {};
+    for (const call of this.calls) {
+      map[call.agentName] = (map[call.agentName] ?? 0) + this.callCost(call);
+    }
+    return map;
+  }
 }
+
+/** Global singleton — shared across all pipeline nodes in a single run */
+export const globalCostTracker = new CostTracker();

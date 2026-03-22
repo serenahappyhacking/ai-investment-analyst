@@ -4,15 +4,19 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useLang } from "./providers";
 
-const POPULAR_TICKERS = [
-  { name: "NVIDIA", ticker: "NVDA", exchange: "US" },
-  { name: "Apple", ticker: "AAPL", exchange: "US" },
-  { name: "Google", ticker: "GOOGL", exchange: "US" },
-  { name: "AMD", ticker: "AMD", exchange: "US" },
-  { name: "Amazon", ticker: "AMZN", exchange: "US" },
-  { name: "Tencent", ticker: "0700.HK", exchange: "HK" },
-  { name: "BYD", ticker: "1211.HK", exchange: "HK" },
-  { name: "Xiaomi", ticker: "1810.HK", exchange: "HK" },
+const HK_TICKERS = [
+  { name: "Tencent", ticker: "0700.HK" },
+  { name: "BYD", ticker: "1211.HK" },
+  { name: "Xiaomi", ticker: "1810.HK" },
+  { name: "Meituan", ticker: "3690.HK" },
+];
+
+const US_TICKERS = [
+  { name: "NVIDIA", ticker: "NVDA" },
+  { name: "Apple", ticker: "AAPL" },
+  { name: "Google", ticker: "GOOGL" },
+  { name: "AMD", ticker: "AMD" },
+  { name: "Amazon", ticker: "AMZN" },
 ];
 
 export function NewAnalysisForm({ demoReportIds }: { demoReportIds?: string[] }) {
@@ -28,30 +32,17 @@ export function NewAnalysisForm({ demoReportIds }: { demoReportIds?: string[] })
 
     setLoading(true);
 
-    // In demo mode (no Supabase), navigate to a demo report
+    // In demo mode (no Supabase), navigate to the analyze visualization in demo mode
     if (demoReportIds && demoReportIds.length > 0) {
-      const randomId = demoReportIds[Math.floor(Math.random() * demoReportIds.length)];
-      await new Promise((r) => setTimeout(r, 800)); // Brief loading animation
-      router.push(`/dashboard/reports/${randomId}`);
+      await new Promise((r) => setTimeout(r, 400));
+      router.push(`/dashboard/analyze?demo=true`);
       setLoading(false);
       return;
     }
 
-    try {
-      const res = await fetch("/api/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ company: company.trim(), mode }),
-      });
-      const data = await res.json();
-      if (data.reportId) {
-        router.push(`/dashboard/reports/${data.reportId}`);
-      }
-    } catch {
-      alert("Failed to start analysis. Please try again.");
-    } finally {
-      setLoading(false);
-    }
+    // Live mode: navigate to analyze page with company param (SSE streaming)
+    router.push(`/dashboard/analyze?company=${encodeURIComponent(company.trim())}&mode=${mode}`);
+    setLoading(false);
   }
 
   return (
@@ -93,18 +84,34 @@ export function NewAnalysisForm({ demoReportIds }: { demoReportIds?: string[] })
         </button>
       </form>
 
-      {/* Quick picks */}
-      <div className="mt-4 flex flex-wrap gap-2">
-        {POPULAR_TICKERS.map((t) => (
-          <button
-            key={t.ticker}
-            onClick={() => setCompany(t.name)}
-            className="rounded-full border border-[var(--border)] bg-[var(--background)] px-3 py-1 text-xs font-medium text-[var(--muted-foreground)] transition-all hover:border-[var(--primary)] hover:bg-[var(--accent)] hover:text-[var(--accent-foreground)]"
-          >
-            {t.name}
-            <span className="ml-1.5 opacity-50">{t.ticker}</span>
-          </button>
-        ))}
+      {/* Quick picks — grouped by market */}
+      <div className="mt-4 space-y-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">HK</span>
+          {HK_TICKERS.map((t) => (
+            <button
+              key={t.ticker}
+              onClick={() => setCompany(t.name)}
+              className="rounded-full border border-[var(--border)] bg-[var(--background)] px-3 py-1 text-xs font-medium text-[var(--muted-foreground)] transition-all hover:border-[var(--primary)] hover:bg-[var(--accent)] hover:text-[var(--accent-foreground)]"
+            >
+              {t.name}
+              <span className="ml-1.5 opacity-50">{t.ticker}</span>
+            </button>
+          ))}
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">US</span>
+          {US_TICKERS.map((t) => (
+            <button
+              key={t.ticker}
+              onClick={() => setCompany(t.name)}
+              className="rounded-full border border-[var(--border)] bg-[var(--background)] px-3 py-1 text-xs font-medium text-[var(--muted-foreground)] transition-all hover:border-[var(--primary)] hover:bg-[var(--accent)] hover:text-[var(--accent-foreground)]"
+            >
+              {t.name}
+              <span className="ml-1.5 opacity-50">{t.ticker}</span>
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   );

@@ -17,12 +17,12 @@ export { buildWorkflow, runWorkflow } from "./graph/workflow.js";
 
 // ── Types ─────────────────────────────────────────────────────
 export { AgentStateAnnotation } from "./types/index.js";
-export type { AgentState, StepEvaluation, ReflectionEntry, PlannedTask, TaskType, LLMCallRecord, CostReport } from "./types/index.js";
+export type { AgentState, PipelineEvent, StepEvaluation, ReflectionEntry, PlannedTask, TaskType, LLMCallRecord, CostReport } from "./types/index.js";
 
 // ── Tools ─────────────────────────────────────────────────────
 export { getSearchTools } from "./tools/searchTools.js";
 export { getFinanceTools, getStockInfo } from "./tools/financeTools.js";
-export { getAllMcpTools } from "./tools/mcpTools.js";
+export { getAllMcpTools, getHKComplianceTools } from "./tools/mcpTools.js";
 
 // ── Integrations ──────────────────────────────────────────────
 export { isNotionConfigured, saveReportToNotion } from "./integrations/notionClient.js";
@@ -34,4 +34,4 @@ export { buildReactAgent, runReactAgent } from "./agents/reactAgent.js";
 
 // ── Skills ────────────────────────────────────────────────────
 export { ProcessRewardModel } from "./skills/processReward.js";
-export { CostTracker } from "./skills/costTracker.js";
+export { CostTracker, globalCostTracker } from "./skills/costTracker.js";

@@ -27,6 +27,8 @@ const MCP_DELIVERY_TOOLS = [
 
 // ── Allowed tool sets per agent role ────────────────────────────────
 
+const HK_COMPLIANCE_TOOLS = ["check_hk_compliance", "search_hkex_filings", "assess_cross_border_risk"];
+
 const ALLOWED_TOOLS: Record<string, string[]> = {
   // Research crew
   webResearcher: [...SEARCH_TOOLS, ...MCP_RESEARCH_TOOLS],
@@ -40,7 +42,7 @@ const ALLOWED_TOOLS: Record<string, string[]> = {
 
   // Risk crew
   riskAnalyst: SEARCH_TOOLS,
-  complianceAnalyst: SEARCH_TOOLS,
+  complianceAnalyst: [...SEARCH_TOOLS, ...HK_COMPLIANCE_TOOLS],
 
   // Delivery crew
   knowledgeManager: MCP_DELIVERY_TOOLS,
@@ -76,7 +78,7 @@ vi.mock("../config.js", async (importOriginal) => {
       withStructuredOutput: vi.fn().mockReturnValue({
         invoke: vi.fn().mockResolvedValue({
           overallScore: 5,
-          dimensions: { market: 5, operational: 5, competitive: 5, financial: 5, geopolitical: 5 },
+          dimensions: { market: 5, operational: 5, competitive: 5, financial: 5, geopolitical: 5, regulatory: 5 },
           summary: "mock",
         }),
       }),

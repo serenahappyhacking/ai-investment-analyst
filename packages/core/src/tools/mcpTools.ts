@@ -234,6 +234,96 @@ export const calendarSetFollowup = tool(
 );
 
 // ═══════════════════════════════════════════════════════════════
+// HK Regulatory Compliance MCP Tools (Compliance-as-Infrastructure)
+// ═══════════════════════════════════════════════════════════════
+
+export const hkComplianceCheck = tool(
+  async ({ ticker, activityType, jurisdiction }): Promise<string> => {
+    // In production: calls fin-intel-mcp via MCP protocol
+    // Here: demonstrates the tool interface pattern
+    return JSON.stringify({
+      status: "success",
+      ticker,
+      activityType,
+      jurisdiction: jurisdiction ?? "HK",
+      applicableRules: [
+        { regulator: "HKMA", rule: "TM-G-1 Technology Risk Management", applies: true },
+        { regulator: "SFC", rule: "AI Guidance for Licensed Corporations", applies: true },
+        { regulator: "PDPO", rule: "Data Protection Principles for AI", applies: true },
+      ],
+      mcpServer: "fin-intel-mcp",
+    });
+  },
+  {
+    name: "check_hk_compliance",
+    description:
+      "Check applicable Hong Kong regulatory requirements (HKMA, SFC, PDPO, HKEX) for a company or activity. " +
+      "Returns matching rules with citations.",
+    schema: z.object({
+      ticker: z.string().describe("Stock ticker, e.g. 0700.HK"),
+      activityType: z.string().describe("Activity type: ai_deployment, crypto, data_privacy, listing, cross_border"),
+      jurisdiction: z.string().optional().default("HK").describe("Jurisdiction code"),
+    }),
+  }
+);
+
+export const hkexFilingSearch = tool(
+  async ({ ticker, filingType, period }): Promise<string> => {
+    return JSON.stringify({
+      status: "success",
+      ticker,
+      filingType: filingType ?? "all",
+      period: period ?? "1y",
+      filings: [
+        { title: `${ticker} Annual Results`, type: "Annual Results", date: "2025-03-20" },
+        { title: `${ticker} ESG Report 2024`, type: "ESG Report", date: "2025-04-01" },
+      ],
+      mcpServer: "fin-intel-mcp",
+    });
+  },
+  {
+    name: "search_hkex_filings",
+    description:
+      "Search HKEX announcements and disclosure filings for a listed company. " +
+      "Returns annual results, connected transactions, ESG reports.",
+    schema: z.object({
+      ticker: z.string().describe("HKEX stock code, e.g. 0700.HK"),
+      filingType: z.string().optional().describe("Filter: Annual Results, Connected Transaction, ESG Report"),
+      period: z.string().optional().default("1y").describe("Time period: 6mo, 1y, 2y"),
+    }),
+  }
+);
+
+export const crossBorderRiskAssess = tool(
+  async ({ ticker, sourceJurisdiction, targetJurisdiction }): Promise<string> => {
+    return JSON.stringify({
+      status: "success",
+      ticker,
+      sourceJurisdiction: sourceJurisdiction ?? "HK",
+      targetJurisdiction: targetJurisdiction ?? "CN",
+      riskFactors: [
+        { factor: "data_localization", severity: "high", description: "PIPL requires mainland data residency" },
+        { factor: "capital_flow_restrictions", severity: "medium", description: "Stock Connect daily quotas apply" },
+        { factor: "vie_structure_risk", severity: "medium", description: "VIE regulatory uncertainty ongoing" },
+      ],
+      overallRiskScore: 7.2,
+      mcpServer: "fin-intel-mcp",
+    });
+  },
+  {
+    name: "assess_cross_border_risk",
+    description:
+      "Assess cross-border regulatory risk for companies operating across HK, Mainland China, and international jurisdictions. " +
+      "Covers data localization, capital flows, dual-listing compliance, sanctions.",
+    schema: z.object({
+      ticker: z.string().describe("Stock ticker"),
+      sourceJurisdiction: z.string().optional().default("HK").describe("Source: HK, US, CN"),
+      targetJurisdiction: z.string().optional().default("CN").describe("Target: HK, US, CN"),
+    }),
+  }
+);
+
+// ═══════════════════════════════════════════════════════════════
 // Tool Collections
 // ═══════════════════════════════════════════════════════════════
 
@@ -250,6 +340,10 @@ export function getMcpDeliveryTools() {
   ];
 }
 
+export function getHKComplianceTools() {
+  return [hkComplianceCheck, hkexFilingSearch, crossBorderRiskAssess];
+}
+
 export function getAllMcpTools() {
-  return [...getMcpResearchTools(), ...getMcpDeliveryTools()];
+  return [...getMcpResearchTools(), ...getMcpDeliveryTools(), ...getHKComplianceTools()];
 }

@@ -6,15 +6,15 @@
  */
 
 import { runWorkflow } from "./graph/workflow.js";
-import type { AgentState } from "./types/index.js";
+import type { AgentState, PipelineEvent } from "./types/index.js";
 
 export interface AnalysisParams {
   company: string;
   query?: string;
   mode?: "quick" | "full";
   stream?: boolean;
-  /** Callback for real-time progress updates */
-  onProgress?: (log: string, phase: string) => void;
+  /** Callback for real-time pipeline events (for SSE streaming, UI visualization) */
+  onEvent?: (event: PipelineEvent) => void;
 }
 
 export interface AnalysisResult {
@@ -27,6 +27,7 @@ export interface AnalysisResult {
   phases: string[];
   logs: string[];
   errors: string[];
+  events: PipelineEvent[];
 }
 
 /**
@@ -34,13 +35,18 @@ export interface AnalysisResult {
  * This is the primary API for both CLI and web consumers.
  */
 export async function runAnalysis(params: AnalysisParams): Promise<AnalysisResult> {
-  const { company, query, mode = "full", stream = true, onProgress } = params;
+  const { company, query, mode = "full", stream = true, onEvent } = params;
 
+  const collectedEvents: PipelineEvent[] = [];
   const state = await runWorkflow({
     company,
     query: query ?? `Comprehensive investment analysis of ${company}`,
     mode,
     stream,
+    onEvent: (event) => {
+      collectedEvents.push(event);
+      if (onEvent) onEvent(event);
+    },
   });
 
   const report = state.finalReport || state.draftReport || "";
@@ -65,5 +71,6 @@ export async function runAnalysis(params: AnalysisParams): Promise<AnalysisResul
     phases: state.logs?.filter((l: string) => l.includes("Phase:")) ?? [],
     logs: state.logs ?? [],
     errors: state.errors ?? [],
+    events: collectedEvents,
   };
 }

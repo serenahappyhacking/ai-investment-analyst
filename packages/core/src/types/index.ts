@@ -135,6 +135,27 @@ export type TaskType =
   | "report_generation"
   | "delivery";
 
+// ═══════════════════════════════════════════════════════════════
+// Pipeline Events (real-time observability)
+// ═══════════════════════════════════════════════════════════════
+
+/** Typed events emitted during pipeline execution for visualization. */
+export type PipelineEvent =
+  | { type: "node_start"; node: string; timestamp: string }
+  | { type: "node_end"; node: string; timestamp: string; durationMs: number }
+  | { type: "log"; node: string; message: string; timestamp: string }
+  | { type: "phase_change"; phase: string; timestamp: string }
+  | { type: "prm_score"; node: string; score: number; dimensions: Record<string, number>; recommendation: string; timestamp: string }
+  | { type: "reflexion"; score: number; shouldRetry: boolean; actionItems: string[]; attempt: number; timestamp: string }
+  | { type: "cost_update"; totalCost: number; totalTokens: number; byAgent: Record<string, number>; timestamp: string }
+  | { type: "skill_invocation"; skill: string; provider: string; node: string; timestamp: string }
+  | { type: "error"; node: string; message: string; timestamp: string }
+  | { type: "pipeline_complete"; qualityScore: number; riskScore: number; durationMs: number; timestamp: string };
+
+// ═══════════════════════════════════════════════════════════════
+// LLM Cost Tracking
+// ═══════════════════════════════════════════════════════════════
+
 export interface LLMCallRecord {
   agentName: string;
   model: string;

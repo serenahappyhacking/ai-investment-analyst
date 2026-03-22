@@ -1,12 +1,12 @@
 # AI Investment Analyst
 
-Multi-agent investment research platform — 10 specialized agents across 4 crews, orchestrated by LangGraph.js with Reflexion self-improvement, real-time market data, and a Next.js web dashboard.
+Skill-composition investment intelligence platform — composable financial skills orchestrated by LangGraph.js, with a pluggable Skill Layer ([fin-intel-mcp](../fin-intel-mcp/)) for regulatory compliance, SEC filing RAG, and technical analysis.
 
 ![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)
 ![Next.js](https://img.shields.io/badge/Next.js_15-000000?logo=next.js&logoColor=white)
 ![LangGraph.js](https://img.shields.io/badge/LangGraph.js-1C3C3C?logo=langchain&logoColor=white)
+![MCP](https://img.shields.io/badge/MCP_Protocol-4f46e5?logoColor=white)
 ![Supabase](https://img.shields.io/badge/Supabase-3FCF8E?logo=supabase&logoColor=white)
-![Vercel AI SDK](https://img.shields.io/badge/Vercel_AI_SDK-000000?logo=vercel&logoColor=white)
 ![Turborepo](https://img.shields.io/badge/Turborepo-EF4444?logo=turborepo&logoColor=white)
 
 ## Architecture
@@ -15,47 +15,66 @@ Multi-agent investment research platform — 10 specialized agents across 4 crew
 graph TD
     START([START]) --> planning[Planning<br/><i>Dynamic task generation</i>]
     planning --> notionContext[Notion Context<br/><i>Retrieve past analyses via MCP</i>]
-    notionContext --> research[Research Crew<br/><i>3 agents · sequential</i>]
-    research --> analysis[Analysis Crew<br/><i>3 agents · parallel via Promise.all</i>]
+    notionContext --> research[Research Skills<br/><i>3 skills · sequential</i>]
+    research --> analysis[Analysis Skills<br/><i>3 skills · parallel via Promise.all</i>]
 
-    analysis -->|"mode = full"| risk[Risk Crew<br/><i>2 agents · sequential</i>]
+    analysis -->|"mode = full"| risk[Compliance & Risk Skills<br/><i>2 skills · HK regulatory tools</i>]
     analysis -->|"mode = quick"| report[Report Generation<br/><i>EN + ZH translation</i>]
     risk --> report
 
     report --> reflexion{Reflexion<br/><i>Score ≥ 7/10?</i>}
     reflexion -->|"score < 7 AND retries < 3"| report
-    reflexion -->|"score ≥ 7 OR max retries"| delivery[Delivery Crew<br/><i>2 agents · MCP</i>]
+    reflexion -->|"score ≥ 7 OR max retries"| delivery[Delivery Skills<br/><i>2 skills · MCP</i>]
 
-    delivery --> finalize[Finalize<br/><i>Save to Notion + email + cost summary</i>]
+    delivery --> finalize[Finalize<br/><i>Cost report + PRM summary</i>]
     finalize --> END([END])
 ```
 
+## Skill Layer: fin-intel-mcp
+
+The [Skill Layer](../fin-intel-mcp/) provides 9 composable MCP tools that any agent can consume — not coupled to this orchestrator:
+
+| Skill | Description | Provider |
+|-------|-------------|----------|
+| `search_sec_filings` | Hybrid RAG search over SEC 10-K/10-Q/8-K filings | fin-intel-mcp |
+| `search_earnings_calls` | RAG search over earnings call transcripts | fin-intel-mcp |
+| `analyze_sentiment` | Financial sentiment analysis (FinBERT/LLM) | fin-intel-mcp |
+| `get_technical_signals` | RSI, MACD, Bollinger Bands, Moving Averages | fin-intel-mcp |
+| `ingest_document` | Fetch SEC filing → parse → chunk → embed → pgvector | fin-intel-mcp |
+| `query_knowledge_base` | General RAG Q&A across all ingested documents | fin-intel-mcp |
+| `check_hk_compliance` | HK regulatory requirements (HKMA, SFC, PDPO, HKEX) | fin-intel-mcp |
+| `search_hkex_filings` | HKEX announcements and disclosure filings | fin-intel-mcp |
+| `assess_cross_border_risk` | Cross-border regulatory risk (HK↔Mainland↔Intl) | fin-intel-mcp |
+
 ## Technical Highlights
 
-**Agent Patterns**
-- **Reflexion** — structured self-improvement with memory across retries; 5-dimension rubric evaluation with root-cause analysis + action items carried forward to next attempt
-- **Process Reward Model** — step-level quality scoring, each dimension scored independently to pinpoint weaknesses
+**Skill Composition**
+- **Compliance-as-Infrastructure** — regulatory rules (HKMA, SFC, PDPO) encoded as pluggable MCP skills, not hardcoded into agent prompts. Any MCP-compatible agent can consume them.
+- **Reflexion** — structured self-improvement with memory across retries; 5-dimension rubric evaluation with root-cause analysis + action items
+- **Process Reward Model** — step-level quality scoring after research, analysis, risk, and report phases
 - **Dynamic Planning** — LLM generates execution plans at runtime, adapting research focus per company
 
 **Engineering**
 - **Turborepo Monorepo** — shared `@repo/core` analysis engine used by both CLI and web dashboard
+- **Pipeline Visualization** — real-time DAG animation, execution log, PRM score badges, cost/token tracking
 - **Next.js 15 Dashboard** — mobile-responsive UI with Supabase Auth, real-time report viewer, watchlist management
-- **Live Data Verification** — real-time Yahoo Finance data appended as verified appendix, superseding any LLM-hallucinated figures
-- **Parallel Execution** — Analysis crew runs 3 specialists concurrently via `Promise.all`, cutting latency ~3x
-- **Pluggable Delivery** — web dashboard (primary), email, Notion, PDF export — all channels are optional
-- **Multi-Market** — US stocks, HK stocks (.HK), A-shares (.SS/.SZ)
+- **Live Data Verification** — real-time Yahoo Finance data appended as verified appendix
+- **Parallel Execution** — Analysis domain runs 3 specialists concurrently via `Promise.all`, cutting latency ~3x
+- **Multi-Market** — US stocks, HK stocks (.HK), A-shares (.SS/.SZ) with HK regulatory depth
 
 ## Tech Stack
 
 | Layer | Technology |
 |-------|-----------|
 | **Frontend** | Next.js 15 (App Router), Tailwind CSS, react-markdown |
+| **Pipeline Viz** | Custom SVG DAG, SSE streaming, real-time execution log |
 | **Auth + DB** | Supabase (Postgres + Auth + RLS + Realtime) |
 | **Orchestration** | LangGraph.js (state machine, conditional edges, checkpointer) |
-| **Agents** | LangChain.js (tool-augmented LLM agents) |
-| **Streaming** | Vercel AI SDK |
-| **LLM** | DeepSeek-V3 (~$0.025/report) |
-| **Finance Data** | Yahoo Finance Chart API (real-time quotes, historical data) |
+| **Skills** | LangChain.js ReAct agents with tool binding |
+| **Skill Layer** | [fin-intel-mcp](../fin-intel-mcp/) (Python/FastAPI/MCP) — 9 composable tools |
+| **LLM** | DeepSeek-V3 (~$0.025/report), multi-provider routing |
+| **Finance Data** | Yahoo Finance Chart API, SEC EDGAR (via MCP) |
+| **HK Compliance** | HKMA, SFC, PDPO, HKEX rules database (via MCP) |
 | **Delivery** | Notion API, Nodemailer, web dashboard |
 | **Monorepo** | Turborepo (npm workspaces) |
 
@@ -105,18 +124,18 @@ SMTP_PASS=your-gmail-app-password
 EMAIL_TO=you@gmail.com
 ```
 
-## Agents & Crews
+## Skill Domains
 
-| Crew | Agents | Mode | Tools |
-|------|--------|------|-------|
+| Domain | Skills | Mode | Tools |
+|--------|--------|------|-------|
 | **Research** | Web Researcher, Data Collector, Synthesizer | Sequential | `web_search`, `news_search`, `competitor_search`, `get_stock_info`, `get_financial_history` |
 | **Analysis** | Financial Analyst, Market Analyst, Tech Analyst | Parallel | `get_stock_info`, `get_financial_history`, `web_search`, `news_search` |
-| **Risk** | Risk Analyst, Compliance Analyst | Sequential | `web_search`, `news_search`, `competitor_search` |
-| **Delivery** | Knowledge Manager, Distribution Coordinator | Sequential | `notion_save_analysis`, `gmail_send_report` |
+| **Compliance & Risk** | Risk Analyst, Compliance Analyst | Sequential | `web_search`, `news_search` + `check_hk_compliance`, `search_hkex_filings`, `assess_cross_border_risk` (MCP) |
+| **Delivery** | Knowledge Manager, Distribution Coordinator | Sequential | `notion_save_analysis`, `gmail_send_report` (MCP) |
 
 ## Example: AMD Analysis (Live Run)
 
-Full pipeline — planning, 10-agent research, Reflexion self-improvement loop, real-time Yahoo Finance data, Notion + email delivery.
+Full pipeline — planning, skill-domain research, Reflexion self-improvement loop, real-time Yahoo Finance data, Notion + email delivery.
 
 ```
 Target: AMD
@@ -161,7 +180,7 @@ ai-investment-analyst/
 │   │       ├── engine.ts           # Main entry: runAnalysis()
 │   │       ├── config.ts           # LLM & workflow config
 │   │       ├── graph/              # LangGraph workflow + nodes
-│   │       ├── crews/              # 4 crews: Research/Analysis/Risk/Delivery
+│   │       ├── crews/              # 4 skill domains: Research/Analysis/Compliance+Risk/Delivery
 │   │       ├── agents/             # ReportWriter (EN + ZH)
 │   │       ├── skills/             # Reflexion, PRM, Planner, CostTracker
 │   │       ├── tools/              # Search, Finance, MCP tools

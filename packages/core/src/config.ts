@@ -16,6 +16,8 @@ import "dotenv/config";
 import { ChatOpenAI } from "@langchain/openai";
 import { ChatAnthropic } from "@langchain/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
+import type { LLMResult } from "@langchain/core/outputs";
+import { globalCostTracker } from "./skills/costTracker.js";
 
 const DEEPSEEK_BASE_URL = process.env.DEEPSEEK_BASE_URL ?? "https://api.deepseek.com/v1";
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY ?? "";
@@ -50,10 +52,34 @@ export function detectProvider(model: string): "deepseek" | "openai" | "anthropi
  * so bindTools(), withStructuredOutput(), invoke() all work identically.
  * All 9 downstream call sites require zero changes.
  */
-export function createLLM(opts: { model?: string; temperature?: number } = {}) {
+/** Cost-tracking callback handler — records token usage to globalCostTracker */
+const costTrackingCallbacks = [{
+  handleLLMEnd(output: LLMResult, _runId: string, _parentRunId?: string, tags?: string[]) {
+    // LangChain stores token usage in llmOutput for OpenAI-compatible models
+    const tokenUsage = output.llmOutput?.tokenUsage as
+      | { promptTokens?: number; completionTokens?: number }
+      | undefined;
+    if (tokenUsage) {
+      globalCostTracker.recordCall({
+        agentName: tags?.[0] ?? "unknown",
+        model: tags?.[1] ?? "unknown",
+        inputTokens: tokenUsage.promptTokens ?? 0,
+        outputTokens: tokenUsage.completionTokens ?? 0,
+        latencyMs: 0,
+        phase: "runtime",
+        success: true,
+        timestamp: new Date().toISOString(),
+      });
+    }
+  },
+}];
+
+export function createLLM(opts: { model?: string; temperature?: number; agentName?: string } = {}) {
   const model = opts.model ?? LLMConfig.analysisModel;
   const temperature = opts.temperature ?? LLMConfig.temperature;
+  const agentName = opts.agentName ?? "unknown";
   const provider = detectProvider(model);
+  const tags = [agentName, model];
 
   switch (provider) {
     case "anthropic":
@@ -61,6 +87,8 @@ export function createLLM(opts: { model?: string; temperature?: number } = {}) {
         model,
         temperature,
         anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? "",
+        callbacks: costTrackingCallbacks,
+        tags,
       });
 
     case "openai":
@@ -68,6 +96,8 @@ export function createLLM(opts: { model?: string; temperature?: number } = {}) {
         model,
         temperature,
         openAIApiKey: process.env.OPENAI_API_KEY ?? "",
+        callbacks: costTrackingCallbacks,
+        tags,
       });
 
     case "deepseek":
@@ -79,6 +109,8 @@ export function createLLM(opts: { model?: string; temperature?: number } = {}) {
           baseURL: DEEPSEEK_BASE_URL,
           apiKey: DEEPSEEK_API_KEY,
         },
+        callbacks: costTrackingCallbacks,
+        tags,
       });
   }
 }
@@ -157,10 +189,12 @@ export const AGENT_ROLES = {
   },
   complianceAnalyst: {
     role: "Regulatory & Compliance Analyst",
-    goal: "Assess regulatory environment and compliance risks",
+    goal: "Assess regulatory environment and compliance risks across US and HK jurisdictions",
     backstory:
-      "You are a former SEC examiner who understands the regulatory landscape. " +
-      "You identify compliance risks and potential regulatory headwinds.",
+      "You are a regulatory specialist with expertise in both US SEC and Hong Kong SFC/HKMA frameworks. " +
+      "You understand cross-border compliance for companies listed on HKEX, including PDPO data protection, " +
+      "Stock Connect rules, the HKMA GenAI Sandbox requirements, and stablecoin licensing. " +
+      "You use HK compliance tools to check applicable regulations and assess cross-border risk.",
   },
   knowledgeManager: {
     role: "Knowledge Base Manager",

@@ -17,8 +17,9 @@
 
 import { randomUUID } from "crypto";
 import { StateGraph, START, END, MemorySaver } from "@langchain/langgraph";
-import { AgentStateAnnotation, type AgentState } from "../types/index.js";
+import { AgentStateAnnotation, type AgentState, type PipelineEvent, type StepEvaluation } from "../types/index.js";
 import { WorkflowConfig } from "../config.js";
+import { globalCostTracker } from "../skills/costTracker.js";
 import {
   planningNode,
   notionContextNode,
@@ -133,10 +134,12 @@ export async function runWorkflow(params: {
   query?: string;
   mode?: "quick" | "full";
   stream?: boolean;
+  onEvent?: (event: PipelineEvent) => void;
 }): Promise<AgentState> {
-  const { company, query, mode = "full", stream = true } = params;
+  const { company, query, mode = "full", stream = true, onEvent } = params;
 
   const workflow = buildWorkflow();
+  const pipelineStart = Date.now();
 
   const initialState: Partial<AgentState> = {
     company,
@@ -170,22 +173,98 @@ export async function runWorkflow(params: {
     },
   };
 
+  const emit = (event: PipelineEvent) => {
+    if (onEvent) onEvent(event);
+  };
+
+  const ts = () => new Date().toISOString();
+
   if (stream) {
     let finalState: AgentState | undefined;
+    let lastPhase = "initialized";
 
     for await (const event of await workflow.stream(initialState, config)) {
       for (const [nodeName, nodeOutput] of Object.entries(event)) {
+        const nodeStart = Date.now();
+        emit({ type: "node_start", node: nodeName, timestamp: ts() });
+
         const output = nodeOutput as Partial<AgentState>;
+
+        // Emit logs
         const logs = output.logs ?? [];
         for (const log of logs) {
           console.log(`  ${log}`);
+          emit({ type: "log", node: nodeName, message: log, timestamp: ts() });
         }
-        if (output.currentPhase) {
+
+        // Emit phase change
+        if (output.currentPhase && output.currentPhase !== lastPhase) {
+          lastPhase = output.currentPhase;
           console.log(`  📍 Phase: ${output.currentPhase}`);
+          emit({ type: "phase_change", phase: output.currentPhase, timestamp: ts() });
         }
+
+        // Emit PRM scores from stepEvaluations
+        if (output.stepEvaluations) {
+          for (const evalStr of output.stepEvaluations) {
+            try {
+              const evaluation = JSON.parse(evalStr) as StepEvaluation;
+              emit({
+                type: "prm_score",
+                node: evaluation.stepName ?? nodeName,
+                score: evaluation.score,
+                dimensions: evaluation.dimensions ?? {},
+                recommendation: evaluation.recommendation ?? "proceed",
+                timestamp: ts(),
+              });
+            } catch {
+              // Non-JSON evaluation string, skip
+            }
+          }
+        }
+
+        // Emit reflexion data
+        if (nodeName === "reflexion" && output.qualityScore != null) {
+          emit({
+            type: "reflexion",
+            score: output.qualityScore,
+            shouldRetry: output.qualityScore < WorkflowConfig.qualityThreshold
+              && (output.iterationCount ?? 0) < WorkflowConfig.maxIterations,
+            actionItems: output.qualityFeedback ? [output.qualityFeedback] : [],
+            attempt: output.iterationCount ?? 1,
+            timestamp: ts(),
+          });
+        }
+
+        // Emit errors
+        if (output.errors) {
+          for (const err of output.errors) {
+            emit({ type: "error", node: nodeName, message: err, timestamp: ts() });
+          }
+        }
+
+        emit({ type: "node_end", node: nodeName, timestamp: ts(), durationMs: Date.now() - nodeStart });
       }
       finalState = Object.values(event)[0] as AgentState;
     }
+
+    // Emit live cost data from global tracker
+    emit({
+      type: "cost_update",
+      totalCost: globalCostTracker.totalCost,
+      totalTokens: globalCostTracker.totalTokens,
+      byAgent: globalCostTracker.getAgentCostMap(),
+      timestamp: ts(),
+    });
+
+    // Emit pipeline complete
+    emit({
+      type: "pipeline_complete",
+      qualityScore: finalState?.qualityScore ?? 0,
+      riskScore: finalState?.riskScore ?? 0,
+      durationMs: Date.now() - pipelineStart,
+      timestamp: ts(),
+    });
 
     return finalState!;
   } else {

@@ -19,6 +19,7 @@ const RiskScoreSchema = z.object({
     competitive: z.number().min(1).max(10),
     financial: z.number().min(1).max(10),
     geopolitical: z.number().min(1).max(10),
+    regulatory: z.number().min(1).max(10),
   }),
   summary: z.string(),
 });
@@ -34,6 +35,7 @@ describe("L9: Schema Validation", () => {
           competitive: 7,
           financial: 5,
           geopolitical: 9,
+          regulatory: 6,
         },
         summary: "High geopolitical risk due to export controls",
       };
@@ -45,7 +47,7 @@ describe("L9: Schema Validation", () => {
         overallScore: 15,
         dimensions: {
           market: 5, operational: 5, competitive: 5,
-          financial: 5, geopolitical: 5,
+          financial: 5, geopolitical: 5, regulatory: 5,
         },
         summary: "test",
       };
@@ -57,7 +59,7 @@ describe("L9: Schema Validation", () => {
         overallScore: 0,
         dimensions: {
           market: 5, operational: 5, competitive: 5,
-          financial: 5, geopolitical: 5,
+          financial: 5, geopolitical: 5, regulatory: 5,
         },
         summary: "test",
       };
@@ -82,19 +84,19 @@ describe("L9: Schema Validation", () => {
         overallScore: 5,
         dimensions: {
           market: 5, operational: 5, competitive: 5,
-          financial: 5, geopolitical: 5,
+          financial: 5, geopolitical: 5, regulatory: 5,
         },
         // missing summary
       };
       expect(() => RiskScoreSchema.parse(invalid)).toThrow();
     });
 
-    it("has exactly 5 risk dimensions", () => {
+    it("has exactly 6 risk dimensions", () => {
       const shape = RiskScoreSchema.shape.dimensions.shape;
       const dimensionNames = Object.keys(shape);
-      expect(dimensionNames).toHaveLength(5);
+      expect(dimensionNames).toHaveLength(6);
       expect(dimensionNames).toEqual(
-        expect.arrayContaining(["market", "operational", "competitive", "financial", "geopolitical"])
+        expect.arrayContaining(["market", "operational", "competitive", "financial", "geopolitical", "regulatory"])
       );
     });
   });
