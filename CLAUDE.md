@@ -1,3 +1,20 @@
+## Permissions (Auto-Approve)
+
+Tool permissions are configured in `.claude/settings.local.json` (not in this file).
+Current broad patterns auto-approve: Read, Write, Edit, Bash(npm/npx/git/gh/curl/*), MCP tools.
+
+To launch with additional CLI overrides:
+```bash
+claude --allowedTools "Bash(npm run test)" "Write" "Read"
+```
+
+For full auto-approve (no confirmations at all):
+```bash
+claude --dangerously-skip-permissions
+```
+
+---
+
 ## Session Management
 
 ### Start of Session
